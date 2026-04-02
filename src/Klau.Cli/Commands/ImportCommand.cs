@@ -122,6 +122,37 @@ public static class ImportCommand
             foreach (var w in batch.Warnings)
                 ConsoleOutput.Warning($"Row {w.RowNumber}: {w.Message}");
 
+            // --- Step 3: Validate rows ---
+            if (batch.Rows.Count > 0)
+            {
+                var validation = RowValidator.Validate(batch.Rows);
+
+                foreach (var w in validation.Warnings)
+                    ConsoleOutput.Warning($"Row {w.RowNumber}: {w.Message}");
+
+                if (validation.AddressMissingCount > 0)
+                {
+                    ConsoleOutput.Blank();
+                    ConsoleOutput.Warning($"{validation.AddressMissingCount} of {validation.TotalRows} " +
+                        "rows have no address — these jobs cannot be geocoded or routed.");
+                    ConsoleOutput.Hint("Add an address column to your export, or map it with --mapping.");
+                }
+
+                if (validation.HasBlockingIssues)
+                {
+                    ConsoleOutput.Error("Over half the rows are missing addresses. " +
+                        "This likely means the address column is not mapped correctly.");
+                    ConsoleOutput.Hint("Re-run with --dry-run to check your column mapping.");
+                    return ExitCodes.InputError;
+                }
+
+                if (validation.DuplicateExternalIdCount > 0)
+                {
+                    ConsoleOutput.Warning($"{validation.DuplicateExternalIdCount} duplicate external ID(s) " +
+                        "— duplicates will be rejected by the API.");
+                }
+            }
+
             // --- Preview ---
             if (batch.Rows.Count > 0)
             {
@@ -142,11 +173,17 @@ public static class ImportCommand
             if (dryRun)
             {
                 ConsoleOutput.Summary($"Dry run complete: {batch.Rows.Count} rows mapped, " +
-                    $"{batch.Warnings.Count} warnings. No data sent to Klau.");
+                    $"{batch.Warnings.Count + (batch.Rows.Count > 0 ? RowValidator.Validate(batch.Rows).Warnings.Count : 0)} " +
+                    "warnings. No data sent to Klau.");
                 return ExitCodes.Success;
             }
 
-            // --- Step 3: Import ---
+            // --- Step 4: Pre-flight readiness check ---
+            ct.ThrowIfCancellationRequested();
+            var ready = await PreflightCheck.RunAsync(client!, ct);
+            if (!ready) return ExitCodes.ConfigError;
+
+            // --- Step 5: Import ---
             ct.ThrowIfCancellationRequested();
             ConsoleOutput.Header($"Importing {batch.Rows.Count} jobs for {dispatchDate}...");
 
@@ -154,7 +191,7 @@ public static class ImportCommand
             var exitCode = RenderResult(result);
             if (exitCode != ExitCodes.Success) return exitCode;
 
-            // --- Step 4: Optimize ---
+            // --- Step 6: Optimize ---
             if (optimize)
             {
                 ct.ThrowIfCancellationRequested();
@@ -166,7 +203,7 @@ public static class ImportCommand
                     $"|  Drive times: {optResult.DriveTimeSource ?? "N/A"}");
             }
 
-            // --- Step 5: Export ---
+            // --- Step 7: Export ---
             if (exportPath is not null)
             {
                 ct.ThrowIfCancellationRequested();
