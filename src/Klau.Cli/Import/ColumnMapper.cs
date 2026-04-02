@@ -32,7 +32,8 @@ public static class ColumnMapper
         ],
         ["SiteAddress"] = [
             "address", "street", "site address", "siteaddress", "addr", "address1", "street address",
-            "service address", "job address", "location address"
+            "service address", "job address", "location address",
+            "full address", "fulladdy", "full addr", "c addr1"
         ],
         ["SiteCity"] = [
             "city", "site city", "sitecity",
@@ -47,7 +48,7 @@ public static class ColumnMapper
             "site zip code"
         ],
         ["JobType"] = [
-            "type", "job type", "jobtype", "service type", "servicetype", "service code", "servicecode",
+            "type", "job type", "jobtype", "service", "service type", "servicetype", "service code", "servicecode",
             "service description", "order action"
         ],
         ["ContainerSize"] = [
@@ -71,7 +72,7 @@ public static class ColumnMapper
         ["ExternalId"] = [
             "external", "external id", "externalid", "order number", "ordernumber",
             "work order", "workorder", "wo", "po", "reference", "ref",
-            "order nbr", "order no", "ticket", "ticket number"
+            "order", "order nbr", "order no", "ticket", "ticket number"
         ],
     };
 
@@ -177,6 +178,11 @@ public static class ColumnMapper
     /// </summary>
     internal static string Normalize(string header) =>
         System.Text.RegularExpressions.Regex.Replace(
-            header.ToLowerInvariant().Replace('_', ' ').Replace('-', ' ').Trim(),
+            header.ToLowerInvariant()
+                .Replace('_', ' ')
+                .Replace('-', ' ')
+                .Replace("#", "")
+                .Replace(".", "")
+                .Trim(),
             @"\s+", " ");
 }

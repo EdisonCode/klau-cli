@@ -272,4 +272,28 @@ public class ColumnMapperTests
         Assert.Equal("Order Nbr", fields["ExternalId"]);
         Assert.Equal("Service Date", fields["RequestedDate"]);
     }
+
+    [Fact]
+    public void Map_RealWorldHeaders_WasteConnectionsRMO()
+    {
+        // Real 14-column header set from a Waste Connections RMO CSV export
+        var headers = new[]
+        {
+            "Order #", "Acct #", "Customer Name", "C_ADDR1", "C_ADDRNUM1",
+            "C_CITY", "C_STATE", "C_ZIP", "Container", "Service",
+            "Destination", "longitude", "latitude", "FullAddy"
+        };
+
+        var result = ColumnMapper.Map(headers);
+        var fields = result.Matches.ToDictionary(m => m.KlauField, m => m.CsvHeader);
+
+        Assert.Equal("Order #", fields["ExternalId"]);
+        Assert.Equal("Customer Name", fields["CustomerName"]);
+        Assert.Equal("C_ADDR1", fields["SiteAddress"]);
+        Assert.Equal("C_CITY", fields["SiteCity"]);
+        Assert.Equal("C_STATE", fields["SiteState"]);
+        Assert.Equal("C_ZIP", fields["SiteZip"]);
+        Assert.Equal("Container", fields["ContainerSize"]);
+        Assert.Equal("Service", fields["JobType"]);
+    }
 }
