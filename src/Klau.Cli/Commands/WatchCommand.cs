@@ -12,13 +12,13 @@ public static class WatchCommand
 {
     public static Command Create()
     {
-        var folderOption = new Option<DirectoryInfo>("--folder", "Folder to watch for new CSV files.")
+        var folderOption = new Option<DirectoryInfo>("--folder", "Folder to watch for new files.")
         { IsRequired = true };
-        var patternOption = new Option<string>("--pattern", () => "*.csv", "File pattern to match.");
+        var patternOption = new Option<string>("--pattern", () => "*.*", "File pattern to match (e.g. *.csv, *.xlsx).");
         var dateOption = new Option<string?>("--date", "Dispatch date (YYYY-MM-DD). Defaults to today.");
         var optimizeOption = new Option<bool>("--optimize", "Run dispatch optimization after each import.");
 
-        var command = new Command("watch", "Watch a folder for new CSV files and import them automatically.")
+        var command = new Command("watch", "Watch a folder for new CSV/XLSX files and import them automatically.")
         {
             folderOption,
             patternOption,

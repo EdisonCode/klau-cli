@@ -20,6 +20,7 @@
     <InternalsVisibleTo Include="Klau.Cli.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="Klau.Sdk" Version="0.7.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
   </ItemGroup>

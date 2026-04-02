@@ -22,19 +22,57 @@ public static class ColumnMapper
     /// </summary>
     private static readonly Dictionary<string, string[]> FieldAliases = new()
     {
-        ["CustomerName"] = ["customer", "cust name", "customer name", "customername", "account name", "accountname", "cust"],
-        ["SiteName"] = ["site", "site name", "sitename", "location", "job site", "jobsite"],
-        ["SiteAddress"] = ["address", "street", "site address", "siteaddress", "addr", "address1", "street address"],
-        ["SiteCity"] = ["city", "site city", "sitecity"],
-        ["SiteState"] = ["state", "st", "site state", "sitestate"],
-        ["SiteZip"] = ["zip", "zipcode", "zip code", "postal", "site zip", "sitezip", "postalcode", "postal code"],
-        ["JobType"] = ["type", "job type", "jobtype", "service", "service type", "servicetype", "service code", "servicecode"],
-        ["ContainerSize"] = ["size", "container", "container size", "containersize", "yard", "yards"],
-        ["TimeWindow"] = ["window", "time window", "timewindow", "time", "delivery window"],
-        ["Priority"] = ["priority", "pri"],
-        ["Notes"] = ["notes", "instructions", "comments", "special instructions"],
-        ["RequestedDate"] = ["date", "requested date", "requesteddate", "request date", "delivery date", "scheduled", "scheduled date"],
-        ["ExternalId"] = ["external", "external id", "externalid", "order", "order number", "ordernumber", "work order", "workorder", "wo", "po", "reference", "ref"],
+        ["CustomerName"] = [
+            "customer", "cust name", "customer name", "customername", "account name", "accountname", "cust",
+            "service name", "billing name", "company", "company name", "client", "client name"
+        ],
+        ["SiteName"] = [
+            "site", "site name", "sitename", "location", "job site", "jobsite",
+            "site name 2", "display details"
+        ],
+        ["SiteAddress"] = [
+            "address", "street", "site address", "siteaddress", "addr", "address1", "street address",
+            "service address", "job address", "location address"
+        ],
+        ["SiteCity"] = [
+            "city", "site city", "sitecity",
+            "service city"
+        ],
+        ["SiteState"] = [
+            "state", "st", "site state", "sitestate",
+            "service state"
+        ],
+        ["SiteZip"] = [
+            "zip", "zipcode", "zip code", "postal", "site zip", "sitezip", "postalcode", "postal code",
+            "site zip code"
+        ],
+        ["JobType"] = [
+            "type", "job type", "jobtype", "service type", "servicetype", "service code", "servicecode",
+            "service description", "order action"
+        ],
+        ["ContainerSize"] = [
+            "size", "container", "container size", "containersize", "yard", "yards",
+            "size value", "box size", "can size"
+        ],
+        ["TimeWindow"] = [
+            "window", "time window", "timewindow", "delivery window"
+        ],
+        ["Priority"] = [
+            "priority", "pri", "order priority"
+        ],
+        ["Notes"] = [
+            "notes", "instructions", "comments", "special instructions",
+            "billing notes", "dispatch notes"
+        ],
+        ["RequestedDate"] = [
+            "date", "requested date", "requesteddate", "request date", "delivery date",
+            "scheduled", "scheduled date", "service date"
+        ],
+        ["ExternalId"] = [
+            "external", "external id", "externalid", "order number", "ordernumber",
+            "work order", "workorder", "wo", "po", "reference", "ref",
+            "order nbr", "order no", "ticket", "ticket number"
+        ],
     };
 
     /// <summary>

@@ -226,4 +226,50 @@ public class ColumnMapperTests
         Assert.Contains("Priority", fields);
         Assert.Contains("Notes", fields);
     }
+
+    [Fact]
+    public void Map_RealWorldHeaders_WasteConnectionsExport()
+    {
+        // Real 59-column header set from a Waste Connections-style XLSX export
+        var headers = new[]
+        {
+            "Selection", "Sequence #", "Order Nbr", "Order Status", "Service",
+            "Order Priority", "Account Nbr", "Order Action", "Service Date",
+            "Driver", "Service Name", "Service Address", "Service City",
+            "Vehicle", "Route", "Service State", "Amount", "Service Description",
+            "Instructions", "Call In By", "Call Date", "Waiver Signed", "Phone",
+            "Recvd By", "Order Created On", "Display Details", "Size Value",
+            "Site Status", "Original Driver", "L 7", "Dispatch", "Reviewed By",
+            "Billing Notes", "Service Qty", "Service Area", "PO Release Nbr",
+            "Entered By", "Billing Name", "Service Name", "Vendor Name",
+            "Site Zip", "Time Started", "Arrival Time", "Departure Time",
+            "Arrived Landfill", "Departed Landfill", "Returned Time", "Time End",
+            "Service Phone", "Material Qty - Billed", "Material Rate - Billed",
+            "Material Subtotal - Billed", "Material Tax Fee - Billed", "Total",
+            "Material ", "Site Name 2", "Leed Required", "Material Vendor",
+            "Route Supervisor"
+        };
+
+        var result = ColumnMapper.Map(headers);
+        var fields = result.Matches.ToDictionary(m => m.KlauField, m => m.CsvHeader);
+
+        // Must map the critical fields from this real export
+        Assert.True(fields.ContainsKey("CustomerName"), "Should map a customer name column");
+        Assert.True(fields.ContainsKey("SiteAddress"), "Should map Service Address");
+        Assert.True(fields.ContainsKey("SiteCity"), "Should map Service City");
+        Assert.True(fields.ContainsKey("SiteState"), "Should map Service State");
+        Assert.True(fields.ContainsKey("SiteZip"), "Should map Site Zip");
+        Assert.True(fields.ContainsKey("ContainerSize"), "Should map Size Value");
+        Assert.True(fields.ContainsKey("ExternalId"), "Should map Order Nbr");
+        Assert.True(fields.ContainsKey("RequestedDate"), "Should map Service Date");
+        Assert.True(fields.ContainsKey("Notes"), "Should map Instructions or Billing Notes");
+        Assert.True(fields.ContainsKey("Priority"), "Should map Order Priority");
+
+        // Verify specific high-value mappings
+        Assert.Equal("Service Address", fields["SiteAddress"]);
+        Assert.Equal("Service City", fields["SiteCity"]);
+        Assert.Equal("Size Value", fields["ContainerSize"]);
+        Assert.Equal("Order Nbr", fields["ExternalId"]);
+        Assert.Equal("Service Date", fields["RequestedDate"]);
+    }
 }

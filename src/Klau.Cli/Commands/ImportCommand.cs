@@ -15,13 +15,13 @@ public static class ImportCommand
 {
     public static Command Create()
     {
-        var fileArg = new Argument<FileInfo>("file", "Path to the CSV file to import");
+        var fileArg = new Argument<FileInfo>("file", "Path to the file to import (CSV, TSV, or XLSX)");
         var dateOption = new Option<string?>("--date", "Dispatch date (YYYY-MM-DD). Defaults to today.");
         var mappingOption = new Option<string?>("--mapping", "Path to a .klau-mapping.json file. Auto-detected by default.");
         var optimizeOption = new Option<bool>("--optimize", "Run dispatch optimization after import.");
         var exportOption = new Option<string?>("--export", "Export the dispatch plan to a CSV file at the given path.");
 
-        var command = new Command("import", "Import a CSV file of jobs into Klau.")
+        var command = new Command("import", "Import jobs from a CSV or Excel file into Klau.")
         {
             fileArg,
             dateOption,
@@ -72,17 +72,22 @@ public static class ImportCommand
         // Resolve date
         var dispatchDate = date ?? DateTime.Today.ToString("yyyy-MM-dd");
 
-        // Step 1: Read CSV
+        // Step 1: Read file (CSV, TSV, or XLSX)
         ConsoleOutput.Blank();
-        CsvData csvData;
+        SpreadsheetData data;
         try
         {
-            csvData = CsvReader.Read(file.FullName);
-            ConsoleOutput.Status($"Reading {file.Name}... {csvData.Rows.Count} rows");
+            data = FileReader.Read(file.FullName);
+            ConsoleOutput.Status($"Reading {file.Name}... {data.Rows.Count} rows ({data.SourceFormat})");
+        }
+        catch (NotSupportedException ex)
+        {
+            ConsoleOutput.Error(ex.Message);
+            return Task.CompletedTask;
         }
         catch (Exception ex)
         {
-            ConsoleOutput.Error($"Failed to read CSV: {ex.Message}");
+            ConsoleOutput.Error($"Failed to read file: {ex.Message}");
             return Task.CompletedTask;
         }
 
@@ -96,7 +101,7 @@ public static class ImportCommand
             try
             {
                 var dict = MappingConfig.Load(Path.GetDirectoryName(mappingPath) ?? csvDir);
-                mapping = MappingConfig.FromDictionary(dict, csvData.Headers);
+                mapping = MappingConfig.FromDictionary(dict, data.Headers);
             }
             catch (Exception ex)
             {
@@ -108,13 +113,13 @@ public static class ImportCommand
         {
             // Auto-detected mapping file
             var dict = MappingConfig.Load(csvDir);
-            mapping = MappingConfig.FromDictionary(dict, csvData.Headers);
+            mapping = MappingConfig.FromDictionary(dict, data.Headers);
             ConsoleOutput.Status($"Using existing mapping from {MappingConfig.FileName}");
         }
         else
         {
             // Infer mapping
-            mapping = ColumnMapper.Map(csvData.Headers);
+            mapping = ColumnMapper.Map(data.Headers);
         }
 
         // Display mapping
@@ -143,7 +148,7 @@ public static class ImportCommand
         }
 
         // Step 3: Map rows to import records
-        var records = MapRowsToRecords(csvData, mapping, dispatchDate);
+        var records = MapRowsToRecords(data, mapping, dispatchDate);
 
         // Step 4: Show preview (first 5 rows)
         if (records.MappedRows.Count > 0)
@@ -210,7 +215,7 @@ public static class ImportCommand
         return Task.CompletedTask;
     }
 
-    private static MappedRecords MapRowsToRecords(CsvData csv, ColumnMapping mapping, string dispatchDate)
+    private static MappedRecords MapRowsToRecords(SpreadsheetData csv, ColumnMapping mapping, string dispatchDate)
     {
         var rows = new List<Dictionary<string, string>>();
         var warnings = new List<string>();
