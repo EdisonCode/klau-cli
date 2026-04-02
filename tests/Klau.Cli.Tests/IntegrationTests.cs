@@ -126,7 +126,7 @@ public class IntegrationTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("No API key", output);
-        Assert.Contains("KLAU_API_KEY", output);
+        Assert.Contains("klau login", output);
     }
 
     // ── Dry Run Tests ───────────────────────────────────────────────────────

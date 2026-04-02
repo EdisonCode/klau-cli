@@ -1,7 +1,7 @@
 using System.CommandLine;
 using System.CommandLine.Invocation;
-using System.Runtime.InteropServices;
 using System.Threading.Channels;
+using Klau.Cli.Auth;
 using Klau.Cli.Domain;
 using Klau.Cli.Import;
 using Klau.Cli.Output;
@@ -73,11 +73,11 @@ public static class WatchCommand
             return ExitCodes.InputError;
         }
 
-        var resolvedKey = apiKey ?? Environment.GetEnvironmentVariable("KLAU_API_KEY");
+        var resolvedKey = CredentialStore.ResolveApiKey(apiKey);
         if (string.IsNullOrWhiteSpace(resolvedKey))
         {
-            ConsoleOutput.Error("No API key provided.");
-            ConsoleOutput.Hint("Set KLAU_API_KEY environment variable or use --api-key.");
+            ConsoleOutput.Error("No API key found.");
+            ConsoleOutput.Hint("Run: klau login");
             return ExitCodes.ConfigError;
         }
 

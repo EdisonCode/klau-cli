@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.CommandLine.Invocation;
 using System.Diagnostics;
+using Klau.Cli.Auth;
 using Klau.Cli.Domain;
 using Klau.Cli.Import;
 using Klau.Cli.Output;
@@ -58,12 +59,12 @@ public static class ImportCommand
     {
         var stopwatch = Stopwatch.StartNew();
 
-        // --- Validate config ---
-        var resolvedKey = apiKey ?? Environment.GetEnvironmentVariable("KLAU_API_KEY");
+        // --- Validate config (flag > env var > stored credentials) ---
+        var resolvedKey = CredentialStore.ResolveApiKey(apiKey);
         if (!dryRun && string.IsNullOrWhiteSpace(resolvedKey))
         {
-            ConsoleOutput.Error("No API key provided.");
-            ConsoleOutput.Hint("Set KLAU_API_KEY environment variable or use --api-key.");
+            ConsoleOutput.Error("No API key found.");
+            ConsoleOutput.Hint("Run: klau login");
             return ExitCodes.ConfigError;
         }
 
