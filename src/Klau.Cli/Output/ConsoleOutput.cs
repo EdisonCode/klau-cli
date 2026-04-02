@@ -67,11 +67,29 @@ public static class ConsoleOutput
     }
 
     /// <summary>
+    /// Print an actionable hint to help the user fix the problem.
+    /// </summary>
+    public static void Hint(string message)
+    {
+        lock (Lock)
+        {
+            Console.Write("    ");
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.Write("\u2192 ");
+            Console.ResetColor();
+            Console.WriteLine(message);
+        }
+    }
+
+    /// <summary>
     /// Print a blank line for visual separation.
     /// </summary>
     public static void Blank()
     {
-        Console.WriteLine();
+        lock (Lock)
+        {
+            Console.WriteLine();
+        }
     }
 
     /// <summary>

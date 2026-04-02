@@ -25,7 +25,7 @@ public class CsvReaderTests
         var csv = "Name,Address\n\"Smith, Inc.\",\"123 Main St, Suite 4\"";
         var result = CsvReader.Parse(csv);
 
-        Assert.Equal(2, result.Headers.Length);
+        Assert.Equal(2, result.Headers.Count);
         Assert.Single(result.Rows);
         Assert.Equal("Smith, Inc.", result.Rows[0][0]);
         Assert.Equal("123 Main St, Suite 4", result.Rows[0][1]);

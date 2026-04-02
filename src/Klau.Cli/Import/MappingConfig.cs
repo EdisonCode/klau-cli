@@ -28,15 +28,20 @@ public static class MappingConfig
         File.Exists(GetPath(csvDirectory));
 
     /// <summary>
-    /// Load a mapping file. Returns a dictionary of csvHeader -> klauField.
+    /// Load a mapping file from the standard location in a directory.
     /// </summary>
-    public static Dictionary<string, string> Load(string csvDirectory)
-    {
-        var path = GetPath(csvDirectory);
-        if (!File.Exists(path))
-            throw new FileNotFoundException($"Mapping file not found: {path}", path);
+    public static Dictionary<string, string> Load(string csvDirectory) =>
+        LoadFromFile(GetPath(csvDirectory));
 
-        var json = File.ReadAllText(path);
+    /// <summary>
+    /// Load a mapping from an explicit file path.
+    /// </summary>
+    public static Dictionary<string, string> LoadFromFile(string filePath)
+    {
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"Mapping file not found: {filePath}", filePath);
+
+        var json = File.ReadAllText(filePath);
         return JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
     }
 
@@ -64,7 +69,7 @@ public static class MappingConfig
     /// <summary>
     /// Convert a persisted dictionary back into a ColumnMapping (all confidence = 1.0 since user-confirmed).
     /// </summary>
-    public static ColumnMapping FromDictionary(Dictionary<string, string> dict, string[] csvHeaders)
+    public static ColumnMapping FromDictionary(Dictionary<string, string> dict, IReadOnlyList<string> csvHeaders)
     {
         var matches = new List<ColumnMatch>();
         var unmapped = new List<string>();

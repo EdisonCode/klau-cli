@@ -34,7 +34,7 @@ public class XlsxReaderTests
         {
             var data = XlsxReader.Read(path);
 
-            Assert.Equal(3, data.Headers.Length);
+            Assert.Equal(3, data.Headers.Count);
             Assert.Equal("Customer", data.Headers[0]);
             Assert.Equal(2, data.Rows.Count);
             Assert.Equal("Acme Corp", data.Rows[0][0]);

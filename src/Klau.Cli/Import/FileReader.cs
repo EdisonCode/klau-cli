@@ -40,4 +40,10 @@ public static class FileReader
 
     private static SpreadsheetData ToCsvSpreadsheet(CsvData csv) =>
         new(csv.Headers, csv.Rows, "CSV");
+
+    /// <summary>
+    /// Supported file extensions for user-facing messages.
+    /// </summary>
+    public static string SupportedFormatsText =>
+        string.Join(", ", SupportedExtensions.Order());
 }

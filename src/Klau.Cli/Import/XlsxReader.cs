@@ -39,7 +39,7 @@ public static class XlsxReader
         }
 
         // Remaining rows are data
-        var rows = new List<string[]>();
+        var rows = new List<IReadOnlyList<string>>();
         for (var row = 2; row <= rowCount; row++)
         {
             var rowData = new string[colCount];

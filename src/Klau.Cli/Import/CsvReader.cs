@@ -3,7 +3,7 @@ namespace Klau.Cli.Import;
 /// <summary>
 /// Parsed result from reading a CSV file.
 /// </summary>
-public sealed record CsvData(string[] Headers, List<string[]> Rows);
+public sealed record CsvData(IReadOnlyList<string> Headers, IReadOnlyList<IReadOnlyList<string>> Rows);
 
 /// <summary>
 /// Reads CSV files with support for quoted fields, delimiter detection,
@@ -16,10 +16,18 @@ public static class CsvReader
     /// <summary>
     /// Read a CSV file and return parsed headers and rows.
     /// </summary>
+    private const long MaxFileSizeBytes = 100 * 1024 * 1024; // 100MB
+
     public static CsvData Read(string filePath)
     {
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"CSV file not found: {filePath}", filePath);
+
+        var fileSize = new FileInfo(filePath).Length;
+        if (fileSize > MaxFileSizeBytes)
+            throw new InvalidOperationException(
+                $"File is {fileSize / (1024 * 1024)}MB, exceeding the 100MB limit. " +
+                "Split the file into smaller batches.");
 
         var text = File.ReadAllText(filePath);
         return Parse(text);
@@ -48,13 +56,14 @@ public static class CsvReader
         // Remove fully empty rows
         allRows = allRows
             .Where(row => row.Any(cell => !string.IsNullOrWhiteSpace(cell)))
-            .ToList();
+            .ToList<string[]>();
 
         if (allRows.Count == 0)
             throw new FormatException("CSV contains no data rows.");
 
-        var headers = allRows[0];
-        var dataRows = allRows.Skip(1).ToList();
+        IReadOnlyList<string> headers = allRows[0];
+        IReadOnlyList<IReadOnlyList<string>> dataRows = allRows.Skip(1)
+            .Select(r => (IReadOnlyList<string>)r).ToList();
 
         return new CsvData(headers, dataRows);
     }

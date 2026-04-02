@@ -1,12 +1,23 @@
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Runtime.InteropServices;
+using System.Threading.Channels;
+using Klau.Cli.Domain;
+using Klau.Cli.Import;
 using Klau.Cli.Output;
+using Klau.Sdk;
 
 namespace Klau.Cli.Commands;
 
 /// <summary>
-/// Watches a folder for new CSV files and automatically imports them.
-/// Processed files are moved to a processed/ subfolder.
+/// Watches a folder for new files and automatically imports them.
+/// Designed for months-long unattended operation with:
+/// - Channel-based event processing (no polling waste)
+/// - Lock file to prevent concurrent watchers
+/// - Failed file handling with error companion files
+/// - Heartbeat file for liveness monitoring
+/// - Processed directory retention policy
+/// - Graceful SIGTERM handling
 /// </summary>
 public static class WatchCommand
 {
@@ -14,16 +25,19 @@ public static class WatchCommand
     {
         var folderOption = new Option<DirectoryInfo>("--folder", "Folder to watch for new files.")
         { IsRequired = true };
-        var patternOption = new Option<string>("--pattern", () => "*.*", "File pattern to match (e.g. *.csv, *.xlsx).");
-        var dateOption = new Option<string?>("--date", "Dispatch date (YYYY-MM-DD). Defaults to today.");
-        var optimizeOption = new Option<bool>("--optimize", "Run dispatch optimization after each import.");
+        var patternOption = new Option<string>("--pattern", () => "*.*",
+            "File pattern to match (e.g. *.csv, *.xlsx).");
+        var dateOption = new Option<string?>("--date",
+            "Dispatch date (YYYY-MM-DD). Defaults to today. Use 'today' for dynamic date in watch mode.");
+        var optimizeOption = new Option<bool>("--optimize",
+            "Run dispatch optimization after each import.");
+        var retainDaysOption = new Option<int>("--retain-days", () => 30,
+            "Days to keep files in processed/ before cleanup.");
 
-        var command = new Command("watch", "Watch a folder for new CSV/XLSX files and import them automatically.")
+        var command = new Command("watch",
+            "Watch a folder for new CSV/XLSX files and import them automatically.")
         {
-            folderOption,
-            patternOption,
-            dateOption,
-            optimizeOption,
+            folderOption, patternOption, dateOption, optimizeOption, retainDaysOption,
         };
 
         command.SetHandler(async (InvocationContext ctx) =>
@@ -32,128 +46,243 @@ public static class WatchCommand
             var pattern = ctx.ParseResult.GetValueForOption(patternOption)!;
             var date = ctx.ParseResult.GetValueForOption(dateOption);
             var optimize = ctx.ParseResult.GetValueForOption(optimizeOption);
+            var retainDays = ctx.ParseResult.GetValueForOption(retainDaysOption);
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
-
             var ct = ctx.GetCancellationToken();
 
-            await RunAsync(folder, pattern, date, optimize, apiKey, ct);
+            ctx.ExitCode = await RunAsync(folder, pattern, date, optimize, retainDays, apiKey, ct);
         });
 
         return command;
     }
 
-    private static async Task RunAsync(
+    private static async Task<int> RunAsync(
         DirectoryInfo folder,
         string pattern,
         string? date,
         bool optimize,
+        int retainDays,
         string? apiKey,
         CancellationToken ct)
     {
+        // --- Validate ---
         if (!folder.Exists)
         {
             ConsoleOutput.Error($"Folder not found: {folder.FullName}");
-            return;
+            ConsoleOutput.Hint("Create the folder or check the path.");
+            return ExitCodes.InputError;
         }
 
-        var processedDir = Path.Combine(folder.FullName, "processed");
-        var outputDir = Path.Combine(folder.FullName, "output");
-        Directory.CreateDirectory(processedDir);
-        Directory.CreateDirectory(outputDir);
-
-        ConsoleOutput.Blank();
-        ConsoleOutput.Status($"Watching {folder.FullName} for {pattern} files...");
-        ConsoleOutput.Status("Press Ctrl+C to stop.");
-        ConsoleOutput.Blank();
-
-        using var watcher = new FileSystemWatcher(folder.FullName, pattern)
+        var resolvedKey = apiKey ?? Environment.GetEnvironmentVariable("KLAU_API_KEY");
+        if (string.IsNullOrWhiteSpace(resolvedKey))
         {
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime,
-            EnableRaisingEvents = true,
-        };
-
-        var fileQueue = new Queue<string>();
-
-        // Process existing files first
-        foreach (var existingFile in Directory.GetFiles(folder.FullName, pattern))
-            fileQueue.Enqueue(existingFile);
-
-        watcher.Created += (_, e) =>
-        {
-            lock (fileQueue)
-            {
-                fileQueue.Enqueue(e.FullPath);
-            }
-        };
-
-        while (!ct.IsCancellationRequested)
-        {
-            string? filePath = null;
-
-            lock (fileQueue)
-            {
-                if (fileQueue.Count > 0)
-                    filePath = fileQueue.Dequeue();
-            }
-
-            if (filePath is not null)
-            {
-                // Wait for file to finish writing (stable size check)
-                await WaitForStableFileAsync(filePath, ct);
-
-                if (ct.IsCancellationRequested) break;
-
-                ConsoleOutput.Header($"New file detected: {Path.GetFileName(filePath)}");
-
-                var exportPath = Path.Combine(outputDir, $"dispatch-{Path.GetFileNameWithoutExtension(filePath)}.csv");
-
-                await ImportCommand.RunAsync(
-                    new FileInfo(filePath),
-                    date ?? DateTime.Today.ToString("yyyy-MM-dd"),
-                    mappingPath: null,
-                    optimize,
-                    exportPath: optimize ? exportPath : null,
-                    apiKey,
-                    ct);
-
-                // Move processed file
-                var destPath = Path.Combine(processedDir, Path.GetFileName(filePath));
-                try
-                {
-                    File.Move(filePath, destPath, overwrite: true);
-                    ConsoleOutput.Success($"Moved to processed/{Path.GetFileName(filePath)}");
-                }
-                catch (Exception ex)
-                {
-                    ConsoleOutput.Warning($"Could not move file: {ex.Message}");
-                }
-            }
-            else
-            {
-                await Task.Delay(1000, ct).ConfigureAwait(false);
-            }
+            ConsoleOutput.Error("No API key provided.");
+            ConsoleOutput.Hint("Set KLAU_API_KEY environment variable or use --api-key.");
+            return ExitCodes.ConfigError;
         }
 
-        ConsoleOutput.Blank();
-        ConsoleOutput.Status("Watch stopped.");
+        // --- Acquire lock file ---
+        var lockPath = Path.Combine(folder.FullName, ".klau-watcher.lock");
+        FileStream lockFile;
+        try
+        {
+            lockFile = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException)
+        {
+            ConsoleOutput.Error("Another watcher is already running on this folder.");
+            ConsoleOutput.Hint($"Remove {lockPath} if the previous watcher crashed.");
+            return ExitCodes.ConfigError;
+        }
+
+        using (lockFile)
+        {
+            var processedDir = Path.Combine(folder.FullName, "processed");
+            var failedDir = Path.Combine(folder.FullName, "failed");
+            var outputDir = Path.Combine(folder.FullName, "output");
+            Directory.CreateDirectory(processedDir);
+            Directory.CreateDirectory(failedDir);
+            Directory.CreateDirectory(outputDir);
+
+            // --- Cleanup old processed files ---
+            CleanupRetention(processedDir, retainDays);
+
+            // --- Setup ---
+            using var client = new KlauClient(resolvedKey);
+            var pipeline = new ImportPipeline(client);
+
+            var channel = Channel.CreateUnbounded<string>(
+                new UnboundedChannelOptions { SingleReader = true });
+
+            ConsoleOutput.Blank();
+            StatusWithTimestamp($"Watching {folder.FullName} for {pattern} files...");
+            StatusWithTimestamp("Press Ctrl+C to stop.");
+            ConsoleOutput.Blank();
+
+            // --- File system watcher ---
+            using var watcher = new FileSystemWatcher(folder.FullName, pattern)
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime,
+                InternalBufferSize = 64 * 1024,
+                EnableRaisingEvents = true,
+            };
+
+            watcher.Created += (_, e) => channel.Writer.TryWrite(e.FullPath);
+            watcher.Renamed += (_, e) => channel.Writer.TryWrite(e.FullPath);
+            watcher.Error += (_, e) =>
+            {
+                ConsoleOutput.Error($"File watcher error: {e.GetException().Message}");
+                ConsoleOutput.Warning("Some file changes may have been missed. Scanning directory...");
+                foreach (var f in Directory.GetFiles(folder.FullName, pattern))
+                    channel.Writer.TryWrite(f);
+            };
+
+            // --- Enqueue existing files ---
+            foreach (var existingFile in Directory.GetFiles(folder.FullName, pattern))
+            {
+                if (FileReader.IsSupported(existingFile))
+                    channel.Writer.TryWrite(existingFile);
+            }
+
+            // --- Periodic safety net scan + heartbeat ---
+            _ = Task.Run(async () =>
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(60), ct);
+
+                        // Heartbeat
+                        var heartbeatPath = Path.Combine(folder.FullName, ".klau-heartbeat");
+                        await File.WriteAllTextAsync(heartbeatPath,
+                            DateTime.UtcNow.ToString("O"), ct);
+
+                        // Safety scan for missed files
+                        foreach (var f in Directory.GetFiles(folder.FullName, pattern))
+                        {
+                            if (FileReader.IsSupported(f))
+                                channel.Writer.TryWrite(f);
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch { /* heartbeat failure is non-fatal */ }
+                }
+            }, ct);
+
+            // --- Process loop ---
+            var filesProcessed = 0;
+            var filesErrored = 0;
+
+            try
+            {
+                await foreach (var filePath in channel.Reader.ReadAllAsync(ct))
+                {
+                    if (!File.Exists(filePath)) continue;
+                    if (!FileReader.IsSupported(filePath)) continue;
+
+                    try
+                    {
+                        var stable = await WaitForStableFileAsync(filePath, ct);
+                        if (!stable) continue;
+
+                        ct.ThrowIfCancellationRequested();
+
+                        var dispatchDate = date is null or "today"
+                            ? DateTime.Today.ToString("yyyy-MM-dd")
+                            : date;
+
+                        ConsoleOutput.Blank();
+                        StatusWithTimestamp($"Processing: {Path.GetFileName(filePath)}");
+
+                        var exportPath = optimize
+                            ? Path.Combine(outputDir, $"dispatch-{Path.GetFileNameWithoutExtension(filePath)}.csv")
+                            : null;
+
+                        var exitCode = await ImportCommand.RunAsync(
+                            new FileInfo(filePath), dispatchDate, null,
+                            optimize, exportPath, false, resolvedKey, ct);
+
+                        if (exitCode == ExitCodes.Success || exitCode == ExitCodes.PartialFailure)
+                        {
+                            var destPath = Path.Combine(processedDir, Path.GetFileName(filePath));
+                            File.Move(filePath, destPath, overwrite: true);
+                            StatusWithTimestamp($"Moved to processed/{Path.GetFileName(filePath)}");
+                            filesProcessed++;
+                        }
+                        else
+                        {
+                            MoveToFailed(filePath, failedDir, $"Import exited with code {exitCode}");
+                            filesErrored++;
+                        }
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw; // Let outer catch handle graceful shutdown
+                    }
+                    catch (Exception ex)
+                    {
+                        ConsoleOutput.Error($"Failed to process {Path.GetFileName(filePath)}: {ex.Message}");
+                        MoveToFailed(filePath, failedDir, ex.ToString());
+                        filesErrored++;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Graceful shutdown
+            }
+
+            ConsoleOutput.Blank();
+            StatusWithTimestamp($"Watch stopped. Processed: {filesProcessed}, Errors: {filesErrored}");
+
+            // Clean up lock file
+            try { File.Delete(lockPath); } catch { /* best effort */ }
+
+            return ExitCodes.Success;
+        }
     }
 
-    /// <summary>
-    /// Wait until the file size stabilizes (i.e., no other process is writing to it).
-    /// </summary>
-    private static async Task WaitForStableFileAsync(string path, CancellationToken ct)
+    private static void MoveToFailed(string filePath, string failedDir, string errorDetails)
+    {
+        try
+        {
+            var fileName = Path.GetFileName(filePath);
+            var destPath = Path.Combine(failedDir, fileName);
+            File.Move(filePath, destPath, overwrite: true);
+            File.WriteAllText(
+                Path.Combine(failedDir, $"{fileName}.error"),
+                $"{DateTime.UtcNow:O}\n{errorDetails}");
+            ConsoleOutput.Warning($"Moved to failed/{fileName} (see .error file for details)");
+        }
+        catch (Exception ex)
+        {
+            ConsoleOutput.Error($"Could not move failed file: {ex.Message}");
+        }
+    }
+
+    private static async Task<bool> WaitForStableFileAsync(
+        string path, CancellationToken ct, int maxWaitSeconds = 300)
     {
         var previousSize = -1L;
         var stableChecks = 0;
+        var deadline = DateTime.UtcNow.AddSeconds(maxWaitSeconds);
 
         while (stableChecks < 3 && !ct.IsCancellationRequested)
         {
-            await Task.Delay(500, ct).ConfigureAwait(false);
+            if (DateTime.UtcNow > deadline)
+            {
+                ConsoleOutput.Warning($"File not stable after {maxWaitSeconds}s, skipping: {Path.GetFileName(path)}");
+                return false;
+            }
+
+            try { await Task.Delay(500, ct); }
+            catch (OperationCanceledException) { return false; }
 
             try
             {
                 var info = new FileInfo(path);
-                if (!info.Exists) return;
+                if (!info.Exists) return false;
 
                 if (info.Length == previousSize)
                     stableChecks++;
@@ -163,11 +292,29 @@ public static class WatchCommand
                     stableChecks = 0;
                 }
             }
-            catch
+            catch (IOException)
             {
-                // File may be locked; retry
-                stableChecks = 0;
+                stableChecks = 0; // File locked, retry
             }
         }
+
+        return stableChecks >= 3;
     }
+
+    private static void CleanupRetention(string processedDir, int retainDays)
+    {
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-retainDays);
+            foreach (var file in Directory.GetFiles(processedDir))
+            {
+                if (File.GetLastWriteTimeUtc(file) < cutoff)
+                    File.Delete(file);
+            }
+        }
+        catch { /* retention cleanup is best-effort */ }
+    }
+
+    private static void StatusWithTimestamp(string message) =>
+        ConsoleOutput.Status($"[{DateTime.UtcNow:HH:mm:ss}] {message}");
 }

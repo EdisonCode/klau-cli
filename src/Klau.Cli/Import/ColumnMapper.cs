@@ -8,7 +8,7 @@ public sealed record ColumnMatch(string CsvHeader, string KlauField, double Conf
 /// <summary>
 /// Full mapping result for all CSV columns.
 /// </summary>
-public sealed record ColumnMapping(List<ColumnMatch> Matches, List<string> UnmappedHeaders);
+public sealed record ColumnMapping(IReadOnlyList<ColumnMatch> Matches, IReadOnlyList<string> UnmappedHeaders);
 
 /// <summary>
 /// Fuzzy-matches CSV column headers to Klau ImportJobRecord field names.
@@ -78,7 +78,7 @@ public static class ColumnMapper
     /// <summary>
     /// Map CSV headers to Klau fields using fuzzy matching.
     /// </summary>
-    public static ColumnMapping Map(string[] csvHeaders)
+    public static ColumnMapping Map(IReadOnlyList<string> csvHeaders)
     {
         var matches = new List<ColumnMatch>();
         var unmapped = new List<string>();
@@ -135,7 +135,7 @@ public static class ColumnMapper
         {
             if (usedFields.Contains(field)) continue;
 
-            if (normalized.Contains(alias) || alias.Contains(normalized))
+            if (normalized.Contains(alias) || (normalized.Length > 3 && alias.Contains(normalized)))
             {
                 // Score by how close the lengths are
                 var score = 0.7 * Math.Min(normalized.Length, alias.Length) / Math.Max(normalized.Length, alias.Length);
@@ -175,18 +175,8 @@ public static class ColumnMapper
     /// <summary>
     /// Normalize a header string: lowercase, strip underscores/hyphens, collapse whitespace.
     /// </summary>
-    internal static string Normalize(string header)
-    {
-        var result = header
-            .ToLowerInvariant()
-            .Replace('_', ' ')
-            .Replace('-', ' ')
-            .Trim();
-
-        // Collapse multiple spaces
-        while (result.Contains("  "))
-            result = result.Replace("  ", " ");
-
-        return result;
-    }
+    internal static string Normalize(string header) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            header.ToLowerInvariant().Replace('_', ' ').Replace('-', ' ').Trim(),
+            @"\s+", " ");
 }
