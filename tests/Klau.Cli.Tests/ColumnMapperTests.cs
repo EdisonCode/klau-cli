@@ -228,9 +228,9 @@ public class ColumnMapperTests
     }
 
     [Fact]
-    public void Map_RealWorldHeaders_WasteConnectionsExport()
+    public void Map_RealWorldHeaders_LargeDispatchExport()
     {
-        // Real 59-column header set from a Waste Connections-style XLSX export
+        // Real 59-column header set from a large hauler dispatch system
         var headers = new[]
         {
             "Selection", "Sequence #", "Order Nbr", "Order Status", "Service",
@@ -274,9 +274,9 @@ public class ColumnMapperTests
     }
 
     [Fact]
-    public void Map_RealWorldHeaders_WasteConnectionsRMO()
+    public void Map_RealWorldHeaders_CompactDispatchExport()
     {
-        // Real 14-column header set from a Waste Connections RMO CSV export
+        // Real 14-column header set from a compact hauler dispatch CSV export
         var headers = new[]
         {
             "Order #", "Acct #", "Customer Name", "C_ADDR1", "C_ADDRNUM1",

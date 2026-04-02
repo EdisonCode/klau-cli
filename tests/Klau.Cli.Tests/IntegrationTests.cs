@@ -257,9 +257,9 @@ public class IntegrationTests : IDisposable
     // ── Real-World Format Tests ─────────────────────────────────────────────
 
     [Fact]
-    public void Import_DryRun_WasteConnectionsFormat()
+    public void Import_DryRun_LargeDispatchFormat()
     {
-        // Simulated 59-column Waste Connections-style export
+        // Simulated 59-column hauler dispatch system export
         var xlsx = WriteXlsx("wc-export.xlsx",
             ["Selection", "Sequence #", "Order Nbr", "Order Status", "Service",
              "Order Priority", "Account Nbr", "Order Action", "Service Date",
