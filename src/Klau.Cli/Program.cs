@@ -27,15 +27,6 @@ public static class Program
             ApiKeyOption,
         };
 
-        var versionOption = new Option<bool>("--version", "Show version information.");
-        rootCommand.AddGlobalOption(versionOption);
-
-        rootCommand.SetHandler((bool showVersion) =>
-        {
-            if (showVersion)
-                Console.WriteLine($"klau {Version}");
-        }, versionOption);
-
         rootCommand.AddCommand(ImportCommand.Create());
         rootCommand.AddCommand(CreateConfigCommand());
 
