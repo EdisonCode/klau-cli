@@ -22,13 +22,14 @@ public static class DoctorCommand
         command.SetHandler(async (InvocationContext ctx) =>
         {
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
-            ctx.ExitCode = await RunAsync(apiKey);
+            var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
+            ctx.ExitCode = await RunAsync(apiKey, tenantFlag);
         });
 
         return command;
     }
 
-    private static async Task<int> RunAsync(string? apiKeyFlag)
+    private static async Task<int> RunAsync(string? apiKeyFlag, string? tenantFlag)
     {
         ConsoleOutput.Blank();
         ConsoleOutput.Header("Klau CLI diagnostics:");
@@ -52,6 +53,18 @@ public static class DoctorCommand
                 : Environment.GetEnvironmentVariable("KLAU_API_KEY") is not null ? "KLAU_API_KEY env var"
                 : "~/.config/klau/credentials.json";
             ConsoleOutput.Success($"Authentication: {CredentialStore.Mask(apiKey)} (from {source})");
+        }
+
+        // --- Tenant ---
+        var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
+        if (tenantId is not null)
+        {
+            var tenantSource = !string.IsNullOrWhiteSpace(tenantFlag) ? "--tenant flag" : "stored credentials";
+            ConsoleOutput.Success($"Tenant: {tenantId} (from {tenantSource})");
+        }
+        else
+        {
+            ConsoleOutput.Status("Tenant: none (operating as primary account)");
         }
 
         // --- API connectivity ---

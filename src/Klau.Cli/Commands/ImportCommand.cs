@@ -47,10 +47,11 @@ public static class ImportCommand
             var exportPath = ctx.ParseResult.GetValueForOption(exportOption);
             var dryRun = ctx.ParseResult.GetValueForOption(dryRunOption);
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
+            var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
             var ct = ctx.GetCancellationToken();
 
             ctx.ExitCode = await RunAsync(
-                file, date, mappingPath, optimize, exportPath, dryRun, apiKey, ct);
+                file, date, mappingPath, optimize, exportPath, dryRun, apiKey, tenantFlag, ct);
         });
 
         command.AddCommand(WatchCommand.Create());
@@ -65,6 +66,7 @@ public static class ImportCommand
         string? exportPath,
         bool dryRun,
         string? apiKey,
+        string? tenantFlag,
         CancellationToken ct)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -111,7 +113,11 @@ public static class ImportCommand
         {
             ct.ThrowIfCancellationRequested();
             using var client = dryRun ? null : new KlauClient(resolvedKey!);
-            var pipeline = client is not null ? new ImportPipeline(client) : null;
+            var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
+            IKlauClient? api = client is not null && tenantId is not null
+                ? client.ForTenant(tenantId)
+                : client;
+            var pipeline = api is not null ? new ImportPipeline(api) : null;
 
             (data, mapping) = pipeline is not null
                 ? pipeline.ReadAndMap(file.FullName, mappingPath)
@@ -203,7 +209,7 @@ public static class ImportCommand
 
             // --- Step 4: Pre-flight readiness check ---
             ct.ThrowIfCancellationRequested();
-            var preflightResult = await PreflightCheck.RunAsync(client!, ct);
+            var preflightResult = await PreflightCheck.RunAsync(api!, ct);
             RenderPreflight(preflightResult);
             if (!preflightResult.CanGoLive) return ExitCodes.ConfigError;
 

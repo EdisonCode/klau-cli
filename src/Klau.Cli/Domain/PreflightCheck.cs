@@ -27,7 +27,7 @@ public static class PreflightCheck
     /// Check account readiness and return results. The caller is responsible
     /// for rendering the result to the console.
     /// </summary>
-    public static async Task<PreflightResult> RunAsync(KlauClient client, CancellationToken ct)
+    public static async Task<PreflightResult> RunAsync(IKlauClient client, CancellationToken ct)
     {
         try
         {

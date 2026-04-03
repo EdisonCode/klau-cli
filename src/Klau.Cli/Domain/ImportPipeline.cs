@@ -12,9 +12,9 @@ namespace Klau.Cli.Domain;
 /// </summary>
 public sealed class ImportPipeline
 {
-    private readonly KlauClient _client;
+    private readonly IKlauClient _client;
 
-    public ImportPipeline(KlauClient client)
+    public ImportPipeline(IKlauClient client)
     {
         _client = client;
     }

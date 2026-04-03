@@ -48,9 +48,10 @@ public static class WatchCommand
             var optimize = ctx.ParseResult.GetValueForOption(optimizeOption);
             var retainDays = ctx.ParseResult.GetValueForOption(retainDaysOption);
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
+            var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
             var ct = ctx.GetCancellationToken();
 
-            ctx.ExitCode = await RunAsync(folder, pattern, date, optimize, retainDays, apiKey, ct);
+            ctx.ExitCode = await RunAsync(folder, pattern, date, optimize, retainDays, apiKey, tenantFlag, ct);
         });
 
         return command;
@@ -63,6 +64,7 @@ public static class WatchCommand
         bool optimize,
         int retainDays,
         string? apiKey,
+        string? tenantFlag,
         CancellationToken ct)
     {
         // --- Validate ---
@@ -109,7 +111,9 @@ public static class WatchCommand
 
             // --- Setup ---
             using var client = new KlauClient(resolvedKey);
-            var pipeline = new ImportPipeline(client);
+            var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
+            IKlauClient api = tenantId is not null ? client.ForTenant(tenantId) : client;
+            var pipeline = new ImportPipeline(api);
 
             var channel = Channel.CreateUnbounded<string>(
                 new UnboundedChannelOptions { SingleReader = true });
@@ -202,7 +206,7 @@ public static class WatchCommand
 
                         var exitCode = await ImportCommand.RunAsync(
                             new FileInfo(filePath), dispatchDate, null,
-                            optimize, exportPath, false, resolvedKey, ct);
+                            optimize, exportPath, false, resolvedKey, tenantFlag, ct);
 
                         if (exitCode == ExitCodes.Success || exitCode == ExitCodes.PartialFailure)
                         {

@@ -42,9 +42,17 @@ public static class StatusCommand
             }
 
             // Tenant
-            var tenantId = stored?.TenantId;
-            if (tenantId is not null)
-                ConsoleOutput.Status($"Tenant: {tenantId}");
+            var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
+            var resolvedTenant = CredentialStore.ResolveTenantId(tenantFlag);
+            if (resolvedTenant is not null)
+            {
+                var tenantSource = !string.IsNullOrWhiteSpace(tenantFlag) ? "--tenant flag" : "stored credentials";
+                ConsoleOutput.Success($"Tenant: {resolvedTenant} (from {tenantSource})");
+            }
+            else
+            {
+                ConsoleOutput.Status("Tenant: none");
+            }
 
             // Config file location
             ConsoleOutput.Status($"Config: {CredentialStore.GetConfigDirectory()}");

@@ -59,10 +59,17 @@ public static class CredentialStore
     }
 
     /// <summary>
-    /// Resolve the tenant ID from stored credentials.
-    /// CLI flag or env var would override this if added later.
+    /// Resolve the tenant ID from the priority chain.
+    /// Priority: CLI --tenant flag > stored credentials.
+    /// Returns null if no tenant is configured anywhere.
     /// </summary>
-    public static string? ResolveTenantId() => Load()?.TenantId;
+    public static string? ResolveTenantId(string? cliFlag)
+    {
+        if (!string.IsNullOrWhiteSpace(cliFlag))
+            return cliFlag;
+
+        return Load()?.TenantId;
+    }
 
     /// <summary>
     /// Store credentials to disk.

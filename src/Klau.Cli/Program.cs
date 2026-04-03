@@ -14,6 +14,14 @@ public static class Program
         "--api-key",
         "Klau API key (overrides KLAU_API_KEY env var and stored credentials).");
 
+    /// <summary>
+    /// Global --tenant option for multi-tenant (division) scoping.
+    /// Overrides the stored tenant in credentials.
+    /// </summary>
+    public static readonly Option<string?> TenantOption = new(
+        "--tenant",
+        "Tenant/division ID for multi-tenant operations.");
+
     public static async Task<int> Main(string[] args)
     {
         // Non-blocking update check — runs in background, shows result at end
@@ -23,6 +31,7 @@ public static class Program
             "Klau CLI - Import CSV/XLSX job data into Klau and optimize dispatch. No code required.")
         {
             ApiKeyOption,
+            TenantOption,
         };
 
         rootCommand.AddCommand(LoginCommand.Create());
@@ -30,6 +39,8 @@ public static class Program
         rootCommand.AddCommand(StatusCommand.Create());
         rootCommand.AddCommand(DoctorCommand.Create());
         rootCommand.AddCommand(ImportCommand.Create());
+        rootCommand.AddCommand(SetupCommand.Create());
+        rootCommand.AddCommand(TenantCommands.Create());
 
         var exitCode = await rootCommand.InvokeAsync(args);
 
