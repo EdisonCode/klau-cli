@@ -14,9 +14,19 @@ namespace Klau.Cli.Commands;
 /// </summary>
 public static class ImportCommand
 {
+    /// <summary>
+    /// Known Klau field names, used for interactive remapping of low-confidence columns.
+    /// </summary>
+    private static readonly string[] KlauFields =
+    [
+        "CustomerName", "SiteName", "SiteAddress", "SiteCity", "SiteState", "SiteZip",
+        "JobType", "ContainerSize", "TimeWindow", "Priority", "Notes", "RequestedDate", "ExternalId"
+    ];
+
     public static Command Create()
     {
-        var fileArg = new Argument<FileInfo>("file", "Path to the file to import (CSV, TSV, or XLSX)");
+        var fileArg = new Argument<FileInfo?>("file", "Path to the file to import (CSV, TSV, or XLSX)");
+        fileArg.Arity = ArgumentArity.ZeroOrOne;
         var dateOption = new Option<string?>("--date", "Dispatch date (YYYY-MM-DD). Defaults to today.");
         var mappingOption = new Option<string?>("--mapping", "Path to a column mapping JSON file.");
         var optimizeOption = new Option<bool>("--optimize", "Run dispatch optimization after import.");
@@ -48,7 +58,7 @@ public static class ImportCommand
     }
 
     internal static async Task<int> RunAsync(
-        FileInfo file,
+        FileInfo? file,
         string? date,
         string? mappingPath,
         bool optimize,
@@ -59,13 +69,21 @@ public static class ImportCommand
     {
         var stopwatch = Stopwatch.StartNew();
 
+        // --- Resolve file if not provided ---
+        if (file is null)
+        {
+            file = TryResolveFile();
+            if (file is null)
+                return ExitCodes.InputError;
+        }
+
         // --- Validate config (flag > env var > stored credentials) ---
         var resolvedKey = CredentialStore.ResolveApiKey(apiKey);
         if (!dryRun && string.IsNullOrWhiteSpace(resolvedKey))
         {
-            ConsoleOutput.Error("No API key found.");
-            ConsoleOutput.Hint("Run: klau login");
-            return ExitCodes.ConfigError;
+            resolvedKey = await TryFirstRunAuthAsync();
+            if (string.IsNullOrWhiteSpace(resolvedKey))
+                return ExitCodes.ConfigError;
         }
 
         // --- Validate date ---
@@ -100,6 +118,9 @@ public static class ImportCommand
                 : ReadAndMapStandalone(file.FullName, mappingPath);
 
             ConsoleOutput.Status($"Reading {file.Name}... {data.Rows.Count} rows ({data.SourceFormat})");
+
+            // --- Check for low-confidence mappings ---
+            mapping = ConfirmLowConfidenceMappings(mapping);
 
             // --- Display mapping ---
             ConsoleOutput.Header("Column mapping:");
@@ -186,9 +207,11 @@ public static class ImportCommand
 
             // --- Step 5: Import ---
             ct.ThrowIfCancellationRequested();
-            ConsoleOutput.Header($"Importing {batch.Rows.Count} jobs for {dispatchDate}...");
-
-            var result = await pipeline!.ImportAsync(batch, dispatchDate, ct);
+            ImportOutcome result;
+            using (ConsoleOutput.StartSpinner($"Importing {batch.Rows.Count} jobs for {dispatchDate}"))
+            {
+                result = await pipeline!.ImportAsync(batch, dispatchDate, ct);
+            }
             var exitCode = RenderResult(result);
             if (exitCode != ExitCodes.Success) return exitCode;
 
@@ -196,8 +219,11 @@ public static class ImportCommand
             if (optimize)
             {
                 ct.ThrowIfCancellationRequested();
-                ConsoleOutput.Header("Optimizing dispatch...");
-                var optResult = await pipeline.OptimizeAsync(dispatchDate, ct);
+                ImportOutcome.OptimizationComplete optResult;
+                using (ConsoleOutput.StartSpinner("Optimizing dispatch"))
+                {
+                    optResult = await pipeline.OptimizeAsync(dispatchDate, ct);
+                }
                 ConsoleOutput.Success($"Grade: {optResult.Grade ?? "N/A"} " +
                     $"({optResult.PlanQuality ?? 0}/100)  |  Flow: {optResult.FlowScore ?? 0}/100");
                 ConsoleOutput.Success($"Assigned: {optResult.Assigned ?? 0}/{(optResult.Assigned ?? 0) + (optResult.Unassigned ?? 0)}  " +
@@ -208,8 +234,10 @@ public static class ImportCommand
             if (exportPath is not null)
             {
                 ct.ThrowIfCancellationRequested();
-                ConsoleOutput.Header($"Exporting dispatch plan...");
-                await pipeline.ExportAsync(dispatchDate, exportPath, ct);
+                using (ConsoleOutput.StartSpinner("Exporting dispatch plan"))
+                {
+                    await pipeline.ExportAsync(dispatchDate, exportPath, ct);
+                }
                 ConsoleOutput.Success($"Exported to {exportPath}");
             }
 
