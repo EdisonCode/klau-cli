@@ -73,15 +73,18 @@ public static class CredentialStore
         Directory.CreateDirectory(dir);
 
         var path = GetCredentialsPath();
+        var tmpPath = path + ".tmp";
         var json = JsonSerializer.Serialize(credentials, JsonOptions);
-        File.WriteAllText(path, json);
+        File.WriteAllText(tmpPath, json);
 
-        // Restrict file permissions on Unix-like systems
+        // Restrict file permissions on Unix-like systems before moving into place
         if (!OperatingSystem.IsWindows())
         {
-            File.SetUnixFileMode(path,
+            File.SetUnixFileMode(tmpPath,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
+
+        File.Move(tmpPath, path, overwrite: true);
     }
 
     /// <summary>

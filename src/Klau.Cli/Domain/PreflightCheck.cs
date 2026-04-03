@@ -1,7 +1,20 @@
-using Klau.Cli.Output;
 using Klau.Sdk;
 
 namespace Klau.Cli.Domain;
+
+/// <summary>
+/// Result of a pre-flight readiness check.
+/// </summary>
+public sealed record PreflightResult(
+    bool CanGoLive,
+    int ReadyPercentage,
+    IReadOnlyList<PreflightIssue> Issues);
+
+/// <summary>
+/// A single issue found during pre-flight readiness check.
+/// </summary>
+public sealed record PreflightIssue(
+    string Label, string? Detail, string Hint, bool Required, bool Blocking);
 
 /// <summary>
 /// Pre-flight readiness check before import. Verifies the Klau account
@@ -11,62 +24,51 @@ namespace Klau.Cli.Domain;
 public static class PreflightCheck
 {
     /// <summary>
-    /// Check account readiness and display results. Returns false if
-    /// blocking issues prevent dispatch optimization.
+    /// Check account readiness and return results. The caller is responsible
+    /// for rendering the result to the console.
     /// </summary>
-    public static async Task<bool> RunAsync(KlauClient client, CancellationToken ct)
+    public static async Task<PreflightResult> RunAsync(KlauClient client, CancellationToken ct)
     {
-        ConsoleOutput.Header("Pre-flight readiness check:");
-
         try
         {
             var report = await client.Readiness.CheckAsync(ct);
 
             if (report.CanGoLive)
-            {
-                ConsoleOutput.Success($"Account ready ({report.ReadyPercentage}% configured)");
-                return true;
-            }
+                return new PreflightResult(true, report.ReadyPercentage, []);
 
-            ConsoleOutput.Warning($"Account {report.ReadyPercentage}% configured — some items need attention:");
-            ConsoleOutput.Blank();
-
+            var issues = new List<PreflightIssue>();
             var blocking = false;
+
             foreach (var section in report.Sections)
             foreach (var item in section.Items)
             {
                 if (item.IsComplete) continue;
 
                 if (item.Required)
-                {
                     blocking = true;
-                    ConsoleOutput.Error($"{item.Label}: {item.Detail ?? "not configured"}");
-                    ConsoleOutput.Hint(GetRemediationHint(item.Key));
-                }
-                else
-                {
-                    ConsoleOutput.Warning($"{item.Label}: {item.Detail ?? "not configured"}");
-                    ConsoleOutput.Hint(GetRemediationHint(item.Key));
-                }
+
+                issues.Add(new PreflightIssue(
+                    item.Label,
+                    item.Detail,
+                    GetRemediationHint(item.Key),
+                    item.Required,
+                    item.Required));
             }
 
-            if (blocking)
-            {
-                ConsoleOutput.Blank();
-                ConsoleOutput.Error("Blocking issues must be resolved before import.");
-                ConsoleOutput.Hint("Set up your fleet in the Klau dashboard or via the SDK, then retry.");
-                return false;
-            }
-
-            ConsoleOutput.Blank();
-            ConsoleOutput.Warning("Non-blocking issues above may affect optimization quality.");
-            return true;
+            return new PreflightResult(!blocking, report.ReadyPercentage, issues);
         }
         catch (Exception ex)
         {
-            ConsoleOutput.Warning($"Could not verify account readiness: {ex.Message}");
-            ConsoleOutput.Hint("Continuing with import — check your Klau dashboard if optimization fails.");
-            return true; // Don't block on readiness check failures
+            // Don't block on readiness check failures — return as ready
+            // with a single non-blocking warning issue
+            return new PreflightResult(true, -1, [
+                new PreflightIssue(
+                    "Readiness check failed",
+                    ex.Message,
+                    "Continuing with import — check your Klau dashboard if optimization fails.",
+                    Required: false,
+                    Blocking: false)
+            ]);
         }
     }
 

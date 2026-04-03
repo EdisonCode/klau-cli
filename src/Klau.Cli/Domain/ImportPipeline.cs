@@ -1,5 +1,4 @@
 using Klau.Cli.Import;
-using Klau.Cli.Output;
 using Klau.Sdk;
 using Klau.Sdk.Common;
 using Klau.Sdk.Dispatches;
@@ -224,5 +223,7 @@ public sealed class ImportPipeline
     }
 
     private static string Esc(string v) =>
-        v.Contains(',') || v.Contains('"') ? $"\"{v.Replace("\"", "\"\"")}\"" : v;
+        v.Contains(',') || v.Contains('"') || v.Contains('\n') || v.Contains('\r')
+            ? $"\"{v.Replace("\"", "\"\"").Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ")}\""
+            : v;
 }

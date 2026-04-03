@@ -7,7 +7,7 @@ public static class FileReader
 {
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".csv", ".tsv", ".txt", ".xlsx", ".xls"
+        ".csv", ".tsv", ".txt", ".xlsx"
     };
 
     /// <summary>
@@ -27,7 +27,7 @@ public static class FileReader
 
         return ext.ToLowerInvariant() switch
         {
-            ".xlsx" or ".xls" => XlsxReader.Read(filePath),
+            ".xlsx" => XlsxReader.Read(filePath),
             _ => ToCsvSpreadsheet(CsvReader.Read(filePath)),
         };
     }

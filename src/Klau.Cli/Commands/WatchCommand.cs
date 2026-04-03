@@ -113,6 +113,7 @@ public static class WatchCommand
 
             var channel = Channel.CreateUnbounded<string>(
                 new UnboundedChannelOptions { SingleReader = true });
+            var knownFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             ConsoleOutput.Blank();
             StatusWithTimestamp($"Watching {folder.FullName} for {pattern} files...");
@@ -127,21 +128,21 @@ public static class WatchCommand
                 EnableRaisingEvents = true,
             };
 
-            watcher.Created += (_, e) => channel.Writer.TryWrite(e.FullPath);
-            watcher.Renamed += (_, e) => channel.Writer.TryWrite(e.FullPath);
+            watcher.Created += (_, e) => TryEnqueue(channel, knownFiles, e.FullPath);
+            watcher.Renamed += (_, e) => TryEnqueue(channel, knownFiles, e.FullPath);
             watcher.Error += (_, e) =>
             {
                 ConsoleOutput.Error($"File watcher error: {e.GetException().Message}");
                 ConsoleOutput.Warning("Some file changes may have been missed. Scanning directory...");
                 foreach (var f in Directory.GetFiles(folder.FullName, pattern))
-                    channel.Writer.TryWrite(f);
+                    TryEnqueue(channel, knownFiles, f);
             };
 
             // --- Enqueue existing files ---
             foreach (var existingFile in Directory.GetFiles(folder.FullName, pattern))
             {
                 if (FileReader.IsSupported(existingFile))
-                    channel.Writer.TryWrite(existingFile);
+                    TryEnqueue(channel, knownFiles, existingFile);
             }
 
             // --- Periodic safety net scan + heartbeat ---
@@ -162,7 +163,7 @@ public static class WatchCommand
                         foreach (var f in Directory.GetFiles(folder.FullName, pattern))
                         {
                             if (FileReader.IsSupported(f))
-                                channel.Writer.TryWrite(f);
+                                TryEnqueue(channel, knownFiles, f);
                         }
                     }
                     catch (OperationCanceledException) { break; }
@@ -205,9 +206,12 @@ public static class WatchCommand
 
                         if (exitCode == ExitCodes.Success || exitCode == ExitCodes.PartialFailure)
                         {
-                            var destPath = Path.Combine(processedDir, Path.GetFileName(filePath));
+                            var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+                            var destName = $"{Path.GetFileNameWithoutExtension(filePath)}-{timestamp}{Path.GetExtension(filePath)}";
+                            var destPath = Path.Combine(processedDir, destName);
                             File.Move(filePath, destPath, overwrite: true);
-                            StatusWithTimestamp($"Moved to processed/{Path.GetFileName(filePath)}");
+                            File.SetLastWriteTimeUtc(destPath, DateTime.UtcNow);
+                            StatusWithTimestamp($"Moved to processed/{destName}");
                             filesProcessed++;
                         }
                         else
@@ -233,13 +237,15 @@ public static class WatchCommand
                 // Graceful shutdown
             }
 
+            channel.Writer.TryComplete();
+
             ConsoleOutput.Blank();
             StatusWithTimestamp($"Watch stopped. Processed: {filesProcessed}, Errors: {filesErrored}");
 
             // Clean up lock file
             try { File.Delete(lockPath); } catch { /* best effort */ }
 
-            return ExitCodes.Success;
+            return filesErrored > 0 ? ExitCodes.PartialFailure : ExitCodes.Success;
         }
     }
 
@@ -247,13 +253,14 @@ public static class WatchCommand
     {
         try
         {
-            var fileName = Path.GetFileName(filePath);
-            var destPath = Path.Combine(failedDir, fileName);
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+            var destName = $"{Path.GetFileNameWithoutExtension(filePath)}-{timestamp}{Path.GetExtension(filePath)}";
+            var destPath = Path.Combine(failedDir, destName);
             File.Move(filePath, destPath, overwrite: true);
             File.WriteAllText(
-                Path.Combine(failedDir, $"{fileName}.error"),
+                Path.Combine(failedDir, $"{destName}.error"),
                 $"{DateTime.UtcNow:O}\n{errorDetails}");
-            ConsoleOutput.Warning($"Moved to failed/{fileName} (see .error file for details)");
+            ConsoleOutput.Warning($"Moved to failed/{destName} (see .error file for details)");
         }
         catch (Exception ex)
         {
@@ -313,6 +320,15 @@ public static class WatchCommand
             }
         }
         catch { /* retention cleanup is best-effort */ }
+    }
+
+    private static void TryEnqueue(Channel<string> channel, HashSet<string> knownFiles, string filePath)
+    {
+        lock (knownFiles)
+        {
+            if (knownFiles.Add(filePath))
+                channel.Writer.TryWrite(filePath);
+        }
     }
 
     private static void StatusWithTimestamp(string message) =>

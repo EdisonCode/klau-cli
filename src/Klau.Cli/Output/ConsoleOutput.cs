@@ -243,7 +243,7 @@ public sealed class Spinner : IDisposable
     private readonly string _label;
     private readonly Timer? _timer;
     private int _frameIndex;
-    private bool _disposed;
+    private volatile bool _disposed;
 
     internal Spinner(string label)
     {

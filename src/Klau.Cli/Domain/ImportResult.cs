@@ -43,5 +43,5 @@ public abstract record ImportOutcome
 
     public sealed record ApiError(string Code, string Message, string? Hint) : ImportOutcome;
 
-    public sealed record DryRunComplete(int RowCount) : ImportOutcome;
+    // ConfigurationMissing and InputError are used by the RenderResult switch in ImportCommand.
 }

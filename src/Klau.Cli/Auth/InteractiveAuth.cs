@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
-using Klau.Cli.Domain;
 using Klau.Cli.Output;
 
 namespace Klau.Cli.Auth;
@@ -10,7 +9,7 @@ namespace Klau.Cli.Auth;
 /// Shared interactive authentication flows used by both LoginCommand and
 /// first-run detection in ImportCommand.
 ///
-/// Returns (exitCode, apiKey) — callers check exitCode for success before using the key.
+/// Each method returns the API key on success, or null on failure.
 /// </summary>
 public static class InteractiveAuth
 {
