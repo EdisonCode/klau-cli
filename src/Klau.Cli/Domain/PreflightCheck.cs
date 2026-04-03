@@ -39,10 +39,18 @@ public static class PreflightCheck
             var issues = new List<PreflightIssue>();
             var blocking = false;
 
+            // Only surface items relevant to CLI dispatch workflows
+            var dispatchKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "drivers", "trucks", "yards", "dumpSites",
+                "dumpSiteMaterials", "companyInfo",
+            };
+
             foreach (var section in report.Sections)
             foreach (var item in section.Items)
             {
                 if (item.IsComplete) continue;
+                if (!dispatchKeys.Contains(item.Key)) continue;
 
                 if (item.Required)
                     blocking = true;

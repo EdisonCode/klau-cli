@@ -73,13 +73,14 @@ public static class DoctorCommand
             try
             {
                 using var client = new KlauClient(apiKey);
-                var company = await client.Company.GetAsync();
+                IKlauClient api = tenantId is not null ? client.ForTenant(tenantId) : client;
+                var company = await api.Company.GetAsync();
                 ConsoleOutput.Success($"API connectivity: OK ({company.Name})");
 
                 // --- Account readiness ---
                 try
                 {
-                    var readiness = await client.Readiness.CheckAsync();
+                    var readiness = await api.Readiness.CheckAsync();
                     if (readiness.CanGoLive)
                     {
                         ConsoleOutput.Success($"Dispatch readiness: {readiness.ReadyPercentage}% configured");
@@ -87,8 +88,15 @@ public static class DoctorCommand
                     else
                     {
                         ConsoleOutput.Warning($"Dispatch readiness: {readiness.ReadyPercentage}% configured");
+                        // Only show items relevant to CLI dispatch workflows
+                        var dispatchKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            "drivers", "trucks", "yards", "dumpSites",
+                            "dumpSiteMaterials", "companyInfo",
+                        };
                         foreach (var section in readiness.Sections)
-                        foreach (var item in section.Items.Where(i => i.IsIncomplete))
+                        foreach (var item in section.Items.Where(i =>
+                            i.IsIncomplete && dispatchKeys.Contains(i.Key)))
                         {
                             var severity = item.Required ? "blocking" : "recommended";
                             ConsoleOutput.Warning($"  {item.Label}: {item.Detail ?? "not configured"} ({severity})");

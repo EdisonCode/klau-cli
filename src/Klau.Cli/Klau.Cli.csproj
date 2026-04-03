@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>klau</ToolCommandName>
     <PackageId>Klau.Cli</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>Klau</Authors>
     <Company>Klau</Company>
     <Description>CLI tool for importing CSV job data into Klau and running dispatch optimization. No code required.</Description>
@@ -15,7 +15,11 @@
     <PackageProjectUrl>https://github.com/EdisonCode/klau-cli</PackageProjectUrl>
     <RepositoryUrl>https://github.com/EdisonCode/klau-cli</RepositoryUrl>
     <PackageTags>klau;waste;hauling;dispatch;cli;csv;import</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Klau.Cli.Tests" />
   </ItemGroup>
