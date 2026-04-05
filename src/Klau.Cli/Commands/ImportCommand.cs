@@ -216,9 +216,12 @@ public static class ImportCommand
             // --- Step 5: Import ---
             ct.ThrowIfCancellationRequested();
             ImportOutcome result;
-            using (ConsoleOutput.StartSpinner($"Importing {batch.Rows.Count} jobs for {dispatchDate}"))
+            using (var spinner = ConsoleOutput.StartSpinner($"Importing {batch.Rows.Count} jobs for {dispatchDate}"))
             {
-                result = await pipeline!.ImportAsync(batch, dispatchDate, ct);
+                result = await pipeline!.ImportAsync(batch,
+                    onProgress: (sent, total) =>
+                        spinner.Update($"Importing jobs for {dispatchDate} ({sent}/{total})"),
+                    ct);
             }
             var exitCode = RenderResult(result);
             if (exitCode != ExitCodes.Success) return exitCode;

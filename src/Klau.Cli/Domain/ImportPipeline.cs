@@ -115,12 +115,15 @@ public sealed class ImportPipeline
     /// <summary>
     /// Import mapped rows into Klau via the SDK, chunking into batches of
     /// <see cref="ChunkSize"/> to stay within API and timeout limits.
-    /// The last chunk uses ImportAndWaitAsync to warm the drive-time cache;
-    /// earlier chunks use JobsAsync (no readiness polling).
+    /// All chunks use JobsAsync (POST only). After the loop, readiness is
+    /// polled once for the last batch to warm the drive-time cache.
     /// </summary>
+    /// <param name="batch">Mapped rows to import.</param>
+    /// <param name="onProgress">Optional callback invoked before each chunk with (rowsSentSoFar, totalRows).</param>
+    /// <param name="ct">Cancellation token.</param>
     public async Task<ImportOutcome> ImportAsync(
         MappedBatch batch,
-        string dispatchDate,
+        Action<int, int>? onProgress,
         CancellationToken ct)
     {
         var records = batch.Rows.Select(row => new ImportJobRecord
@@ -141,71 +144,124 @@ public sealed class ImportPipeline
         }).ToList();
 
         var chunks = records.Chunk(ChunkSize).ToList();
+        var multiChunk = chunks.Count > 1;
 
         int totalImported = 0, totalSkipped = 0;
         int totalCustomersCreated = 0, totalSitesCreated = 0;
         var allErrors = new List<string>();
         int rowOffset = 0;
+        var batchIds = new List<string>();
 
-        try
+        // --- Phase 1: Import all chunks via JobsAsync (no readiness polling) ---
+        for (int i = 0; i < chunks.Count; i++)
         {
-            for (int i = 0; i < chunks.Count; i++)
+            ct.ThrowIfCancellationRequested();
+            var chunk = chunks[i];
+            var request = new ImportJobsRequest { Jobs = chunk, CreateMissing = true };
+
+            if (multiChunk)
+                onProgress?.Invoke(rowOffset, records.Count);
+
+            ImportJobsResult result;
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                var chunk = chunks[i];
-                var request = new ImportJobsRequest { Jobs = chunk, CreateMissing = true };
-                var isLastChunk = i == chunks.Count - 1;
-
-                ImportJobsResult result;
-                if (isLastChunk)
-                {
-                    // Last chunk: wait for drive-time cache warm-up
-                    result = await _client.Import.ImportAndWaitAsync(
-                        request,
-                        timeout: TimeSpan.FromSeconds(120),
-                        pollInterval: TimeSpan.FromSeconds(2),
-                        ct: ct);
-                }
-                else
-                {
-                    result = await _client.Import.JobsAsync(request, ct);
-                }
-
-                totalImported += result.Imported;
-                totalSkipped += result.Skipped;
-                totalCustomersCreated += result.CustomersCreated;
-                totalSitesCreated += result.SitesCreated;
-
-                foreach (var e in result.Errors)
-                    allErrors.Add($"Row {e.Row + rowOffset}: {e.Field} - {e.Message}");
-
-                rowOffset += chunk.Length;
+                result = await _client.Import.JobsAsync(request, ct);
+            }
+            catch (KlauApiException ex) when (totalImported > 0)
+            {
+                // A chunk failed after earlier chunks succeeded — report what
+                // was imported so the user knows the system state.
+                allErrors.Add($"Chunk {i + 1}/{chunks.Count} failed: {ex.Message}");
+                return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
+            }
+            catch (KlauApiException ex) when (ex.IsUnauthorized)
+            {
+                return new ImportOutcome.ApiError(
+                    ex.ErrorCode ?? "UNAUTHORIZED", ex.Message,
+                    "Check that your KLAU_API_KEY is valid and not expired.");
+            }
+            catch (KlauApiException ex) when (ex.IsValidation)
+            {
+                return new ImportOutcome.ApiError(
+                    ex.ErrorCode ?? "VALIDATION_ERROR", ex.Message,
+                    "Check your CSV data for invalid values.");
+            }
+            catch (KlauApiException ex)
+            {
+                return new ImportOutcome.ApiError(
+                    ex.ErrorCode ?? "API_ERROR", ex.Message, null);
             }
 
-            if (totalSkipped > 0 && totalImported == 0)
-                return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
+            totalImported += result.Imported;
+            totalSkipped += result.Skipped;
+            totalCustomersCreated += result.CustomersCreated;
+            totalSitesCreated += result.SitesCreated;
 
-            return new ImportOutcome.Success(
-                totalImported, totalSkipped,
-                totalCustomersCreated, totalSitesCreated, allErrors);
+            if (!string.IsNullOrEmpty(result.BatchId))
+                batchIds.Add(result.BatchId);
+
+            foreach (var e in result.Errors)
+                allErrors.Add($"Row {e.Row + rowOffset}: {e.Field} - {e.Message}");
+
+            rowOffset += chunk.Length;
         }
-        catch (KlauApiException ex) when (ex.IsUnauthorized)
+
+        // --- Phase 2: Wait for drive-time cache warm-up (all batches) ---
+        if (batchIds.Count > 0)
         {
-            return new ImportOutcome.ApiError(
-                ex.ErrorCode ?? "UNAUTHORIZED", ex.Message,
-                "Check that your KLAU_API_KEY is valid and not expired.");
+            var allReady = false;
+            try
+            {
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
+                while (DateTime.UtcNow < deadline)
+                {
+                    var pending = false;
+                    foreach (var batchId in batchIds)
+                    {
+                        var readiness = await _client.Import.GetReadinessAsync(batchId, ct);
+                        if (readiness.Status is not ("ready" or "not_applicable"))
+                        {
+                            pending = true;
+                            break;
+                        }
+                    }
+
+                    if (!pending)
+                    {
+                        allReady = true;
+                        break;
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                }
+            }
+            catch (KlauApiException)
+            {
+                // API error polling readiness — jobs are imported, cache status unknown.
+            }
+            catch (HttpRequestException)
+            {
+                // Network error polling readiness — jobs are imported, cache status unknown.
+            }
+
+            if (!allReady)
+            {
+                allErrors.Add("Drive-time cache warm-up timed out. " +
+                    "Optimization may use Haversine estimates for new sites.");
+            }
         }
-        catch (KlauApiException ex) when (ex.IsValidation)
-        {
-            return new ImportOutcome.ApiError(
-                ex.ErrorCode ?? "VALIDATION_ERROR", ex.Message,
-                "Check your CSV data for invalid values.");
-        }
-        catch (KlauApiException ex)
-        {
-            return new ImportOutcome.ApiError(
-                ex.ErrorCode ?? "API_ERROR", ex.Message, null);
-        }
+
+        if (totalSkipped > 0 && totalImported == 0)
+            return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
+
+        // If more than half the rows were skipped, that's a partial failure
+        // even though some imported — the user needs to know something is wrong.
+        if (totalSkipped > 0 && totalSkipped > totalImported)
+            return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
+
+        return new ImportOutcome.Success(
+            totalImported, totalSkipped,
+            totalCustomersCreated, totalSitesCreated, allErrors);
     }
 
     /// <summary>

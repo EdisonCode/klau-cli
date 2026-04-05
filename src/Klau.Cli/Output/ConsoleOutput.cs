@@ -240,7 +240,8 @@ public sealed class Spinner : IDisposable
 {
     private static readonly char[] Frames = ['\u28FE', '\u28FD', '\u28FB', '\u28BF', '\u287F', '\u289F', '\u28AF', '\u28F7'];
 
-    private readonly string _label;
+    private string _label;
+    private int _maxLabelLength;
     private readonly Timer? _timer;
     private int _frameIndex;
     private volatile bool _disposed;
@@ -248,6 +249,7 @@ public sealed class Spinner : IDisposable
     internal Spinner(string label)
     {
         _label = label;
+        _maxLabelLength = label.Length;
 
         if (Console.IsOutputRedirected)
         {
@@ -269,6 +271,19 @@ public sealed class Spinner : IDisposable
         _timer = new Timer(Tick, null, 100, 100);
     }
 
+    /// <summary>
+    /// Update the spinner label while it's running (e.g. for progress).
+    /// </summary>
+    public void Update(string label)
+    {
+        lock (ConsoleOutput.Lock)
+        {
+            _label = label;
+            if (label.Length > _maxLabelLength)
+                _maxLabelLength = label.Length;
+        }
+    }
+
     private void Tick(object? state)
     {
         if (_disposed) return;
@@ -278,7 +293,9 @@ public sealed class Spinner : IDisposable
         lock (ConsoleOutput.Lock)
         {
             if (_disposed) return;
-            Console.Write($"\r  {_label} {Frames[_frameIndex]}");
+            // Pad to max length to clear any previous longer text
+            var padded = _label.PadRight(_maxLabelLength);
+            Console.Write($"\r  {padded} {Frames[_frameIndex]}");
         }
     }
 
@@ -294,7 +311,7 @@ public sealed class Spinner : IDisposable
         lock (ConsoleOutput.Lock)
         {
             // Clear the spinner line
-            var clearWidth = _label.Length + 6; // "  " + label + " " + spinner char + margin
+            var clearWidth = _maxLabelLength + 6; // "  " + label + " " + spinner char + margin
             Console.Write($"\r{new string(' ', clearWidth)}\r");
 
             // Print success line
