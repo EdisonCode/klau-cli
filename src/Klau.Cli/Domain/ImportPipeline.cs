@@ -107,8 +107,16 @@ public sealed class ImportPipeline
     }
 
     /// <summary>
-    /// Import mapped rows into Klau via the SDK.
-    /// Chunks into batches of 200 for API limits.
+    /// Maximum jobs per API request. Keeps each POST well within the HTTP
+    /// timeout and avoids server-side sequential processing bottlenecks.
+    /// </summary>
+    private const int ChunkSize = 200;
+
+    /// <summary>
+    /// Import mapped rows into Klau via the SDK, chunking into batches of
+    /// <see cref="ChunkSize"/> to stay within API and timeout limits.
+    /// The last chunk uses ImportAndWaitAsync to warm the drive-time cache;
+    /// earlier chunks use JobsAsync (no readiness polling).
     /// </summary>
     public async Task<ImportOutcome> ImportAsync(
         MappedBatch batch,
@@ -132,22 +140,54 @@ public sealed class ImportPipeline
             ExternalId = row.ExternalId,
         }).ToList();
 
+        var chunks = records.Chunk(ChunkSize).ToList();
+
+        int totalImported = 0, totalSkipped = 0;
+        int totalCustomersCreated = 0, totalSitesCreated = 0;
+        var allErrors = new List<string>();
+        int rowOffset = 0;
+
         try
         {
-            var result = await _client.Import.ImportAndWaitAsync(
-                new ImportJobsRequest { Jobs = records, CreateMissing = true },
-                timeout: TimeSpan.FromSeconds(120),
-                pollInterval: TimeSpan.FromSeconds(2),
-                ct: ct);
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var chunk = chunks[i];
+                var request = new ImportJobsRequest { Jobs = chunk, CreateMissing = true };
+                var isLastChunk = i == chunks.Count - 1;
 
-            var errors = result.Errors.Select(e => $"Row {e.Row}: {e.Field} - {e.Message}").ToList();
+                ImportJobsResult result;
+                if (isLastChunk)
+                {
+                    // Last chunk: wait for drive-time cache warm-up
+                    result = await _client.Import.ImportAndWaitAsync(
+                        request,
+                        timeout: TimeSpan.FromSeconds(120),
+                        pollInterval: TimeSpan.FromSeconds(2),
+                        ct: ct);
+                }
+                else
+                {
+                    result = await _client.Import.JobsAsync(request, ct);
+                }
 
-            if (result.Skipped > 0 && result.Imported == 0)
-                return new ImportOutcome.PartialFailure(result.Imported, result.Skipped, errors);
+                totalImported += result.Imported;
+                totalSkipped += result.Skipped;
+                totalCustomersCreated += result.CustomersCreated;
+                totalSitesCreated += result.SitesCreated;
+
+                foreach (var e in result.Errors)
+                    allErrors.Add($"Row {e.Row + rowOffset}: {e.Field} - {e.Message}");
+
+                rowOffset += chunk.Length;
+            }
+
+            if (totalSkipped > 0 && totalImported == 0)
+                return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
 
             return new ImportOutcome.Success(
-                result.Imported, result.Skipped,
-                result.CustomersCreated, result.SitesCreated, errors);
+                totalImported, totalSkipped,
+                totalCustomersCreated, totalSitesCreated, allErrors);
         }
         catch (KlauApiException ex) when (ex.IsUnauthorized)
         {
