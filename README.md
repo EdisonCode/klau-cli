@@ -208,6 +208,101 @@ The interactive `klau login` flow creates an API key automatically, which requir
 klau login --api-key kl_live_the_key_they_gave_you
 ```
 
+## Standalone Optimization
+
+Already imported jobs through the dashboard or SDK? Run optimization separately:
+
+```bash
+klau optimize --date 2026-04-03
+```
+
+### Optimization modes
+
+| Mode | Description |
+|---|---|
+| `full-day` | Re-optimize the entire day (default) |
+| `new-job` | Fit newly added jobs into the existing plan |
+| `rebalance` | Rebalance assignments across drivers |
+
+```bash
+klau optimize --date 2026-04-03 --mode new-job --export dispatch-plan.csv
+```
+
+## Diagnostics
+
+```bash
+klau doctor
+```
+
+Checks your environment, authentication, API connectivity, and account configuration in one command. Shows exactly what's working and what needs attention.
+
+## Multi-Tenant Support
+
+For companies with multiple divisions or subsidiaries, each with their own fleet:
+
+```bash
+klau tenant list                    # List available tenants
+klau tenant set <tenant-id>         # Set default tenant for all commands
+klau import orders.csv --tenant <id>  # One-off tenant override
+```
+
+## AI Agent Integration (MCP)
+
+The CLI can run as an [MCP server](https://modelcontextprotocol.io/) for AI agents like Claude Desktop, Cursor, and other MCP-compatible tools:
+
+```bash
+klau mcp
+```
+
+This exposes `import`, `optimize`, `doctor`, and `status` as MCP tools over stdio. AI agents can call them directly with structured parameters and get JSON responses — no shell parsing needed.
+
+### MCP client configuration
+
+Add to your MCP client config (e.g., Claude Desktop `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "klau": {
+      "command": "klau",
+      "args": ["mcp", "--api-key", "kl_live_your_key_here"]
+    }
+  }
+}
+```
+
+If you've already run `klau login`, you can omit `--api-key` — the MCP server uses stored credentials.
+
+## JSON Output
+
+All commands support structured JSON output for scripting and CI/CD:
+
+```bash
+klau import orders.csv --output json
+klau optimize --date 2026-04-03 --output json
+klau doctor --output json
+```
+
+Every command emits a consistent envelope:
+
+```json
+{
+  "command": "import",
+  "status": "success",
+  "exitCode": 0,
+  "data": { "imported": 45, "skipped": 2 },
+  "error": null
+}
+```
+
+### Non-interactive mode
+
+For CI/CD pipelines and automation scripts, use `--yes` to skip all interactive prompts:
+
+```bash
+klau import orders.csv --date 2026-04-03 --optimize --yes
+```
+
 ## All Commands
 
 | Command | Description |
@@ -215,8 +310,22 @@ klau login --api-key kl_live_the_key_they_gave_you
 | `klau login` | Authenticate and store credentials |
 | `klau logout` | Remove stored credentials |
 | `klau status` | Show auth state and configuration |
+| `klau doctor` | Diagnose environment, auth, and account readiness |
 | `klau import <file>` | Import a CSV or XLSX file |
 | `klau import watch` | Watch a folder for files to import automatically |
+| `klau optimize` | Run dispatch optimization for a date |
+| `klau tenant list` | List available tenants |
+| `klau tenant set` | Set the default tenant |
+| `klau mcp` | Run as an MCP server for AI agents |
+
+### Global options
+
+| Option | Description |
+|---|---|
+| `--api-key` | Override stored API key |
+| `--tenant` | Override default tenant for this command |
+| `--output json` | JSON output mode |
+| `--yes` / `-y` | Skip interactive prompts |
 
 ### Import options
 
@@ -227,7 +336,14 @@ klau login --api-key kl_live_the_key_they_gave_you
 | `--optimize` | Run dispatch optimization | false |
 | `--export` | Export dispatch plan CSV | — |
 | `--dry-run` | Preview mapping and validate without importing | false |
-| `--api-key` | Override stored API key | — |
+
+### Optimize options
+
+| Option | Description | Default |
+|---|---|---|
+| `--date` | Dispatch date (YYYY-MM-DD) | today |
+| `--mode` | Optimization mode: full-day, new-job, rebalance | full-day |
+| `--export` | Export dispatch plan CSV | — |
 
 ## Example: Daily Operations Workflow
 
