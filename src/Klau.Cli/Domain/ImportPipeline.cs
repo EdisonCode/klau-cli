@@ -109,9 +109,9 @@ public sealed class ImportPipeline
     /// <summary>
     /// Maximum jobs per API request. The API processes jobs sequentially
     /// (~5s each), so chunk size × 5s must stay under the gateway timeout
-    /// (30s for Azure Front Door). 8 × 5s = 40s provides margin.
+    /// (30s for Azure Front Door). 5 × 5s = 25s with margin.
     /// </summary>
-    private const int ChunkSize = 8;
+    private const int ChunkSize = 5;
 
     /// <summary>
     /// Import mapped rows into Klau via the SDK, chunking into batches of

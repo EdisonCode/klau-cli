@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>klau</ToolCommandName>
     <PackageId>Klau.Cli</PackageId>
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <Authors>Klau</Authors>
     <Company>Klau</Company>
     <Description>CLI tool for importing CSV job data into Klau and running dispatch optimization. No code required.</Description>

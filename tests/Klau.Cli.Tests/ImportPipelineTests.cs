@@ -78,10 +78,10 @@ public class ImportPipelineTests
     public async Task MultiChunk_AggregatesCountsAcrossChunks()
     {
         var import = new FakeImportClient();
-        // Chunk size is 8, so 20 rows = 3 chunks (8 + 8 + 4)
-        import.EnqueueJobsResult(MakeResult(8, batchId: "b-1"));
-        import.EnqueueJobsResult(MakeResult(8, batchId: "b-2"));
-        import.EnqueueJobsResult(MakeResult(4, batchId: "b-3"));
+        // Chunk size is 5, so 12 rows = 3 chunks (5 + 5 + 2)
+        import.EnqueueJobsResult(MakeResult(5, batchId: "b-1"));
+        import.EnqueueJobsResult(MakeResult(5, batchId: "b-2"));
+        import.EnqueueJobsResult(MakeResult(2, batchId: "b-3"));
         import.EnqueueReadiness("b-1", "ready");
         import.EnqueueReadiness("b-2", "ready");
         import.EnqueueReadiness("b-3", "ready");
@@ -89,18 +89,18 @@ public class ImportPipelineTests
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
         var progressCalls = new List<(int sent, int total)>();
         var result = await pipeline.ImportAsync(
-            MakeBatch(20),
+            MakeBatch(12),
             onProgress: (sent, total) => progressCalls.Add((sent, total)),
             CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
-        Assert.Equal(20, success.Imported);
+        Assert.Equal(12, success.Imported);
 
         // Progress should fire for each chunk (multi-chunk mode)
         Assert.Equal(3, progressCalls.Count);
-        Assert.Equal((0, 20), progressCalls[0]);
-        Assert.Equal((8, 20), progressCalls[1]);
-        Assert.Equal((16, 20), progressCalls[2]);
+        Assert.Equal((0, 12), progressCalls[0]);
+        Assert.Equal((5, 12), progressCalls[1]);
+        Assert.Equal((10, 12), progressCalls[2]);
     }
 
     // ── Mid-batch failure returns PartialFailure ────────────────────────────
@@ -109,14 +109,14 @@ public class ImportPipelineTests
     public async Task MultiChunk_SecondChunkFails_ReturnsPartialFailure()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(8, batchId: "b-1"));
+        import.EnqueueJobsResult(MakeResult(5, batchId: "b-1"));
         import.EnqueueJobsException(new KlauApiException("SERVER_ERROR", "Internal error", 500));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(16), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(10), null, CancellationToken.None);
 
         var partial = Assert.IsType<ImportOutcome.PartialFailure>(result);
-        Assert.Equal(8, partial.Imported);
+        Assert.Equal(5, partial.Imported);
         Assert.Contains(partial.Errors, e => e.Contains("Chunk 2/2 failed"));
     }
 
@@ -197,17 +197,17 @@ public class ImportPipelineTests
     public async Task MultiChunk_ErrorRowNumbersAreOffsetCorrectly()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(8)); // chunk 1: no errors
-        import.EnqueueJobsResult(MakeResult(5, skipped: 3, errors: [
+        import.EnqueueJobsResult(MakeResult(5)); // chunk 1: no errors
+        import.EnqueueJobsResult(MakeResult(3, skipped: 2, errors: [
             new ImportError { Row = 3, Field = "externalId", Message = "duplicate" },
         ]));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(16), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(10), null, CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
-        // Row 3 in chunk 2 = row 11 in the CSV (8 offset + 3)
-        Assert.Contains(success.Errors, e => e.StartsWith("Row 11:"));
+        // Row 3 in chunk 2 = row 8 in the CSV (5 offset + 3)
+        Assert.Contains(success.Errors, e => e.StartsWith("Row 8:"));
     }
 
     // ── Single chunk does NOT invoke progress callback ──────────────────────
