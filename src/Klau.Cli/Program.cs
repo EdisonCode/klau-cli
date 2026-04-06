@@ -66,6 +66,7 @@ public static class Program
         rootCommand.AddCommand(OptimizeCommand.Create());
         rootCommand.AddCommand(SetupCommand.Create());
         rootCommand.AddCommand(TenantCommands.Create());
+        rootCommand.AddCommand(McpCommand.Create());
 
         var exitCode = await rootCommand.InvokeAsync(args);
 

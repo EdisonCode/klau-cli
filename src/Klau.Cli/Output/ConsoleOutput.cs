@@ -261,6 +261,9 @@ public sealed class Spinner : IDisposable
         _label = label;
         _maxLabelLength = label.Length;
 
+        // MCP/JSON mode: no terminal output — stdout is the protocol channel
+        if (OutputMode.IsJson) return;
+
         if (Console.IsOutputRedirected)
         {
             // Non-interactive: print the label once and return
@@ -286,6 +289,8 @@ public sealed class Spinner : IDisposable
     /// </summary>
     public void Update(string label)
     {
+        if (OutputMode.IsJson) return;
+
         lock (ConsoleOutput.Lock)
         {
             _label = label;
@@ -316,7 +321,7 @@ public sealed class Spinner : IDisposable
 
         _timer?.Dispose();
 
-        if (Console.IsOutputRedirected) return;
+        if (OutputMode.IsJson || Console.IsOutputRedirected) return;
 
         lock (ConsoleOutput.Lock)
         {
@@ -354,6 +359,9 @@ public sealed class ProgressBar : IDisposable
         _total = Math.Max(total, 1); // Prevent divide-by-zero
         _unit = unit;
 
+        // MCP/JSON mode: no terminal output — stdout is the protocol channel
+        if (OutputMode.IsJson) return;
+
         if (Console.IsOutputRedirected)
         {
             Console.Write("  ");
@@ -367,7 +375,7 @@ public sealed class ProgressBar : IDisposable
     /// <summary>Advance the progress bar by the given count (default 1).</summary>
     public void Advance(int count = 1)
     {
-        if (_disposed) return;
+        if (_disposed || OutputMode.IsJson) return;
 
         var newValue = Interlocked.Add(ref _current, count);
         if (newValue > _total) Interlocked.Exchange(ref _current, _total);
@@ -399,7 +407,7 @@ public sealed class ProgressBar : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (Console.IsOutputRedirected) return;
+        if (OutputMode.IsJson || Console.IsOutputRedirected) return;
 
         lock (ConsoleOutput.Lock)
         {

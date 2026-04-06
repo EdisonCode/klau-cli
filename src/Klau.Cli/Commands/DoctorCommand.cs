@@ -33,7 +33,7 @@ public static class DoctorCommand
         return command;
     }
 
-    private static async Task<int> RunAsync(string? apiKeyFlag, string? tenantFlag,
+    internal static async Task<int> RunAsync(string? apiKeyFlag, string? tenantFlag,
         CancellationToken ct, CliJsonResponse? json = null)
     {
         ConsoleOutput.Blank();
@@ -140,7 +140,7 @@ public static class DoctorCommand
                         };
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     ConsoleOutput.Warning($"Dispatch readiness: could not check ({ex.Message})");
                 }

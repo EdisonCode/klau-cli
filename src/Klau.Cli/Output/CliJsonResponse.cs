@@ -29,12 +29,20 @@ public sealed class CliJsonResponse
         Error = new CliJsonError(code, message, hint);
 
     /// <summary>
-    /// Emit the JSON envelope to stdout. Call once at the end of the command.
+    /// Emit the JSON envelope to stdout. Call once at the end of the CLI command.
     /// </summary>
     public void Emit(int exitCode)
     {
         if (!OutputMode.IsJson) return;
+        Console.WriteLine(ToJsonString(exitCode));
+    }
 
+    /// <summary>
+    /// Serialize the JSON envelope to a string. Used by MCP tool handlers
+    /// to return structured results without writing to stdout.
+    /// </summary>
+    public string ToJsonString(int exitCode)
+    {
         var status = exitCode switch
         {
             ExitCodes.Success => "success",
@@ -51,7 +59,7 @@ public sealed class CliJsonResponse
             ["error"] = Error,
         };
 
-        Console.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.DictionaryStringObject));
+        return JsonSerializer.Serialize(envelope, CliJsonContext.Default.DictionaryStringObject);
     }
 }
 
