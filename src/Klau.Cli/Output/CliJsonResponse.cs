@@ -65,8 +65,15 @@ public sealed class CliJsonResponse
 
 public sealed record CliJsonError(string Code, string Message, string? Hint);
 
+// All types that may appear as values in the Dictionary<string, object?> data bag
+// must be registered here for the source generator to handle polymorphic serialization.
 [JsonSerializable(typeof(JsonElement))]
 [JsonSerializable(typeof(Dictionary<string, object?>))]
 [JsonSerializable(typeof(CliJsonError))]
 [JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(int))]
+[JsonSerializable(typeof(long))]
+[JsonSerializable(typeof(double))]
+[JsonSerializable(typeof(bool))]
+[JsonSerializable(typeof(string))]
 internal partial class CliJsonContext : JsonSerializerContext { }
