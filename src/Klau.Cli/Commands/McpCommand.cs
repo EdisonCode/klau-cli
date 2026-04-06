@@ -45,7 +45,7 @@ public static class McpCommand
 
             // Shared HttpClient for the lifetime of the MCP server — avoids socket
             // exhaustion from creating/disposing HttpClient per tool call.
-            var sharedHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
+            var sharedHttpClient = CliHttp.CreateClient(TimeSpan.FromSeconds(180));
 
             var credentials = new McpCredentials(resolvedKey, tenantId, sharedHttpClient);
 

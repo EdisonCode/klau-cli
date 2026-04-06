@@ -37,6 +37,20 @@ public static class Program
         ["--yes", "-y"],
         "Skip all interactive prompts (non-interactive mode for CI/agents).");
 
+    /// <summary>
+    /// Global --no-color option — suppresses ANSI color codes. Also respects NO_COLOR env var.
+    /// </summary>
+    public static readonly Option<bool> NoColorOption = new(
+        "--no-color",
+        "Suppress colored output. Also set via NO_COLOR env var (https://no-color.org).");
+
+    /// <summary>
+    /// Global --verbose option — enables diagnostic output to stderr.
+    /// </summary>
+    public static readonly Option<bool> VerboseOption = new(
+        ["--verbose", "-v"],
+        "Show diagnostic details (HTTP requests, timing) on stderr.");
+
     public static async Task<int> Main(string[] args)
     {
         // Set output mode flags early — before any command runs.
@@ -45,18 +59,23 @@ public static class Program
         OutputMode.IsJson = ResolveOutputMode(args);
         OutputMode.AutoAccept = args.Any(a =>
             a is "--yes" or "-y");
+        OutputMode.NoColor = args.Any(a => a is "--no-color")
+            || Environment.GetEnvironmentVariable("NO_COLOR") is not null;
+        OutputMode.Verbose = args.Any(a => a is "--verbose" or "-v");
 
         // Non-blocking update check — skip in JSON mode (no human to read it)
         var updateCheck = OutputMode.IsJson ? Task.CompletedTask : UpdateChecker.StartAsync();
 
         var rootCommand = new RootCommand(
-            "Klau CLI - Import CSV/XLSX job data into Klau and optimize dispatch. No code required.")
-        {
-            ApiKeyOption,
-            TenantOption,
-            OutputOption,
-            YesOption,
-        };
+            "Klau CLI - Import CSV/XLSX job data into Klau and optimize dispatch. No code required.");
+
+        // Global options — available on all subcommands in any position
+        rootCommand.AddGlobalOption(ApiKeyOption);
+        rootCommand.AddGlobalOption(TenantOption);
+        rootCommand.AddGlobalOption(OutputOption);
+        rootCommand.AddGlobalOption(YesOption);
+        rootCommand.AddGlobalOption(NoColorOption);
+        rootCommand.AddGlobalOption(VerboseOption);
 
         rootCommand.AddCommand(LoginCommand.Create());
         rootCommand.AddCommand(LogoutCommand.Create());
@@ -67,6 +86,8 @@ public static class Program
         rootCommand.AddCommand(SetupCommand.Create());
         rootCommand.AddCommand(TenantCommands.Create());
         rootCommand.AddCommand(McpCommand.Create());
+        rootCommand.AddCommand(CompletionCommand.Create());
+        rootCommand.AddCommand(UpgradeCommand.Create());
 
         var exitCode = await rootCommand.InvokeAsync(args);
 

@@ -16,9 +16,9 @@ public static class ConsoleOutput
         if (OutputMode.IsJson) return;
         lock (Lock)
         {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            SetColor(ConsoleColor.DarkGray);
             Console.Write("  ");
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine(message);
         }
     }
@@ -32,9 +32,9 @@ public static class ConsoleOutput
         lock (Lock)
         {
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.Green;
+            SetColor(ConsoleColor.Green);
             Console.Write("\u2713 ");
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine(message);
         }
     }
@@ -48,9 +48,9 @@ public static class ConsoleOutput
         lock (Lock)
         {
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.Yellow;
+            SetColor(ConsoleColor.Yellow);
             Console.Write("! ");
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine(message);
         }
     }
@@ -64,9 +64,9 @@ public static class ConsoleOutput
         lock (Lock)
         {
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.Red;
+            SetColor(ConsoleColor.Red);
             Console.Write("\u2717 ");
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine(message);
         }
     }
@@ -80,9 +80,9 @@ public static class ConsoleOutput
         lock (Lock)
         {
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            SetColor(ConsoleColor.DarkCyan);
             Console.Write("\u2192 ");
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine(message);
         }
     }
@@ -109,9 +109,9 @@ public static class ConsoleOutput
         {
             Console.WriteLine();
             Console.Write("  ");
-            Console.ForegroundColor = ConsoleColor.White;
+            SetColor(ConsoleColor.White);
             Console.WriteLine(message);
-            Console.ResetColor();
+            ResetColor();
         }
     }
 
@@ -124,12 +124,12 @@ public static class ConsoleOutput
         lock (Lock)
         {
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.Cyan;
+            SetColor(ConsoleColor.Cyan);
             Console.Write(from.PadRight(padFrom));
-            Console.ResetColor();
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            ResetColor();
+            SetColor(ConsoleColor.DarkGray);
             Console.Write(" \u2192  ");
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine(to);
         }
     }
@@ -165,24 +165,24 @@ public static class ConsoleOutput
         {
             // Header row
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.White;
+            SetColor(ConsoleColor.White);
             for (var i = 0; i < headers.Length; i++)
             {
                 Console.Write(Truncate(headers[i], widths[i]).PadRight(widths[i]));
                 if (i < headers.Length - 1) Console.Write("  ");
             }
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine();
 
             // Separator
             Console.Write("    ");
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            SetColor(ConsoleColor.DarkGray);
             for (var i = 0; i < headers.Length; i++)
             {
                 Console.Write(new string('-', widths[i]));
                 if (i < headers.Length - 1) Console.Write("  ");
             }
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine();
 
             // Data rows
@@ -210,9 +210,9 @@ public static class ConsoleOutput
         {
             Console.WriteLine();
             Console.Write("  ");
-            Console.ForegroundColor = ConsoleColor.Green;
+            SetColor(ConsoleColor.Green);
             Console.WriteLine(message);
-            Console.ResetColor();
+            ResetColor();
             Console.WriteLine();
         }
     }
@@ -233,6 +233,20 @@ public static class ConsoleOutput
     public static ProgressBar StartProgress(string label, int total, string unit = "items")
     {
         return new ProgressBar(label, total, unit);
+    }
+
+    /// <summary>Set console foreground color, respecting NO_COLOR.</summary>
+    internal static void SetColor(ConsoleColor color)
+    {
+        if (!OutputMode.NoColor)
+            Console.ForegroundColor = color;
+    }
+
+    /// <summary>Reset console colors, respecting NO_COLOR.</summary>
+    internal static void ResetColor()
+    {
+        if (!OutputMode.NoColor)
+            Console.ResetColor();
     }
 
     private static string Truncate(string value, int maxLength)
@@ -331,9 +345,9 @@ public sealed class Spinner : IDisposable
 
             // Print success line
             Console.Write("  ");
-            Console.ForegroundColor = ConsoleColor.Green;
+            ConsoleOutput.SetColor(ConsoleColor.Green);
             Console.Write("\u2713 ");
-            Console.ResetColor();
+            ConsoleOutput.ResetColor();
             Console.WriteLine(_label);
         }
     }
@@ -419,9 +433,9 @@ public sealed class ProgressBar : IDisposable
 
             // Print success line
             Console.Write("  ");
-            Console.ForegroundColor = ConsoleColor.Green;
+            ConsoleOutput.SetColor(ConsoleColor.Green);
             Console.Write("\u2713 ");
-            Console.ResetColor();
+            ConsoleOutput.ResetColor();
             Console.WriteLine($"{_label} ({_total} {_unit})");
         }
     }

@@ -58,7 +58,7 @@ public static class UpdateChecker
                 ConsoleOutput.Blank();
                 ConsoleOutput.Status(
                     $"Update available: {CurrentVersion} \u2192 {latest}. " +
-                    "Run: dotnet tool update -g Klau.Cli");
+                    "Run: klau upgrade");
             }
         }
         catch

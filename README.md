@@ -303,6 +303,47 @@ For CI/CD pipelines and automation scripts, use `--yes` to skip all interactive 
 klau import orders.csv --date 2026-04-03 --optimize --yes
 ```
 
+## Shell Completions
+
+Enable tab completion for your shell:
+
+```bash
+# Bash
+echo 'eval "$(klau completion bash)"' >> ~/.bashrc
+
+# Zsh
+echo 'eval "$(klau completion zsh)"' >> ~/.zshrc
+
+# Fish
+klau completion fish | source
+
+# PowerShell
+klau completion powershell >> $PROFILE
+```
+
+## Troubleshooting with --verbose
+
+When something isn't working, `--verbose` shows HTTP request details on stderr:
+
+```bash
+klau doctor --verbose
+```
+
+```
+  [verbose] GET /api/v1/companies/me -> 200 (805ms)
+  [verbose] GET /api/v1/companies/go-live-readiness -> 200 (534ms)
+```
+
+Share this output with support to diagnose connectivity or API issues.
+
+## Updating
+
+```bash
+klau upgrade
+```
+
+The CLI checks for updates in the background and will notify you when a new version is available.
+
 ## All Commands
 
 | Command | Description |
@@ -317,6 +358,8 @@ klau import orders.csv --date 2026-04-03 --optimize --yes
 | `klau tenant list` | List available tenants |
 | `klau tenant set` | Set the default tenant |
 | `klau mcp` | Run as an MCP server for AI agents |
+| `klau completion <shell>` | Generate shell completion scripts |
+| `klau upgrade` | Update to the latest version |
 
 ### Global options
 
@@ -326,6 +369,8 @@ klau import orders.csv --date 2026-04-03 --optimize --yes
 | `--tenant` | Override default tenant for this command |
 | `--output json` | JSON output mode |
 | `--yes` / `-y` | Skip interactive prompts |
+| `--no-color` | Suppress colored output (also via `NO_COLOR` env var) |
+| `--verbose` / `-v` | Show HTTP request details on stderr |
 
 ### Import options
 

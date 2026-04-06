@@ -126,7 +126,7 @@ public static class ImportCommand
             ct.ThrowIfCancellationRequested();
             // Use a longer HTTP timeout than the SDK default (30s) — bulk import
             // processes jobs sequentially and can take 60-90s for large batches.
-            using var httpClient = dryRun ? null : new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
+            using var httpClient = dryRun ? null : CliHttp.CreateClient(TimeSpan.FromSeconds(180));
             using var client = dryRun ? null : new KlauClient(resolvedKey!, httpClient);
             var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
             IKlauClient? api = client is not null && tenantId is not null

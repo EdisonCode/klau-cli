@@ -100,7 +100,7 @@ public static class OptimizeCommand
 
         try
         {
-            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
+            using var httpClient = CliHttp.CreateClient(TimeSpan.FromSeconds(180));
             using var client = new KlauClient(resolvedKey, httpClient);
             var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
             IKlauClient api = tenantId is not null ? client.ForTenant(tenantId) : client;

@@ -11,6 +11,12 @@ public static class OutputMode
     /// <summary>True when --yes / -y is set. Auto-accepts all prompts.</summary>
     public static bool AutoAccept { get; set; }
 
+    /// <summary>True when --no-color is set or NO_COLOR env var is present. Suppresses ANSI color codes.</summary>
+    public static bool NoColor { get; set; }
+
+    /// <summary>True when --verbose is set. Enables diagnostic output to stderr.</summary>
+    public static bool Verbose { get; set; }
+
     /// <summary>True when the CLI should not prompt or use terminal features.</summary>
     public static bool IsNonInteractive =>
         IsJson || AutoAccept || Console.IsInputRedirected || Console.IsOutputRedirected;

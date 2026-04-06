@@ -99,7 +99,8 @@ public static class DoctorCommand
         {
             try
             {
-                using var client = new KlauClient(apiKey);
+                using var httpClient = CliHttp.CreateClient();
+                using var client = new KlauClient(apiKey, httpClient);
                 IKlauClient api = tenantId is not null ? client.ForTenant(tenantId) : client;
                 var company = await api.Company.GetAsync(ct);
                 ConsoleOutput.Success($"API connectivity: OK ({company.Name})");
