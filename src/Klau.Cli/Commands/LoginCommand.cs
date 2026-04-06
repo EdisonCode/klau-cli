@@ -29,7 +29,9 @@ public static class LoginCommand
         command.SetHandler(async (InvocationContext ctx) =>
         {
             var explicitKey = ctx.ParseResult.GetValueForOption(apiKeyOption);
+            var json = new CliJsonResponse("login");
             ctx.ExitCode = await RunAsync(explicitKey);
+            json.Emit(ctx.ExitCode);
         });
 
         return command;

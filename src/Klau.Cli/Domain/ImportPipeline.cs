@@ -266,21 +266,34 @@ public sealed class ImportPipeline
 
     /// <summary>
     /// Run dispatch optimization for the given date.
+    /// Starts the job, then polls with a 3-minute deadline to avoid hanging
+    /// if the optimization worker stalls.
     /// </summary>
     public async Task<ImportOutcome.OptimizationComplete> OptimizeAsync(
         string dispatchDate,
         CancellationToken ct)
     {
-        var optimization = await _client.Dispatches.OptimizeAndWaitAsync(
+        var job = await _client.Dispatches.StartOptimizationAsync(
             new OptimizeRequest
             {
                 Date = dispatchDate,
                 OptimizationMode = OptimizationMode.FULL_DAY,
-            },
-            pollInterval: TimeSpan.FromSeconds(3),
-            ct: ct);
+            }, ct);
 
-        var r = optimization.Result;
+        // Poll with a deadline — don't hang forever if the worker stalls
+        var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(3);
+        while (job.Status is OptimizationJobStatus.PENDING or OptimizationJobStatus.RUNNING)
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException(
+                    "Optimization is still running but the CLI timed out after 3 minutes. " +
+                    "Check the Klau dashboard for results.");
+
+            await Task.Delay(TimeSpan.FromSeconds(3), ct);
+            job = await _client.Dispatches.GetOptimizationStatusAsync(job.JobId, ct);
+        }
+
+        var r = job.Result;
         return new ImportOutcome.OptimizationComplete(
             r?.PlanGrade, r?.PlanQuality, r?.FlowScore,
             r?.AssignedJobs, r?.UnassignedJobs, r?.DriveTimeSource);
@@ -291,6 +304,14 @@ public sealed class ImportPipeline
     /// </summary>
     public async Task ExportAsync(string dispatchDate, string outputPath, CancellationToken ct)
     {
+        // Guard against path traversal — resolve to absolute and ensure it stays
+        // within the current working directory.
+        var resolvedPath = Path.GetFullPath(outputPath);
+        var cwd = Path.GetFullPath(Directory.GetCurrentDirectory());
+        if (!resolvedPath.StartsWith(cwd + Path.DirectorySeparatorChar) && resolvedPath != cwd)
+            throw new InvalidOperationException(
+                $"Export path must be within the current directory. Resolved to: {resolvedPath}");
+
         var board = await _client.Dispatches.GetBoardAsync(dispatchDate, ct);
 
         var lines = new List<string>

@@ -48,10 +48,13 @@ public static class ImportCommand
             var dryRun = ctx.ParseResult.GetValueForOption(dryRunOption);
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
             var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
-            var ct = ctx.GetCancellationToken();
+            var ct = SafeCancellation.Create(ctx.GetCancellationToken());
+            var json = new CliJsonResponse("import");
 
             ctx.ExitCode = await RunAsync(
-                file, date, mappingPath, optimize, exportPath, dryRun, apiKey, tenantFlag, ct);
+                file, date, mappingPath, optimize, exportPath, dryRun, apiKey, tenantFlag, ct, json);
+
+            json.Emit(ctx.ExitCode);
         });
 
         command.AddCommand(WatchCommand.Create());
@@ -67,7 +70,8 @@ public static class ImportCommand
         bool dryRun,
         string? apiKey,
         string? tenantFlag,
-        CancellationToken ct)
+        CancellationToken ct,
+        CliJsonResponse? json = null)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -76,7 +80,10 @@ public static class ImportCommand
         {
             file = TryResolveFile();
             if (file is null)
+            {
+                json?.SetError("INPUT_ERROR", "No file specified.");
                 return ExitCodes.InputError;
+            }
         }
 
         // --- Validate config (flag > env var > stored credentials) ---
@@ -85,7 +92,10 @@ public static class ImportCommand
         {
             resolvedKey = await TryFirstRunAuthAsync();
             if (string.IsNullOrWhiteSpace(resolvedKey))
+            {
+                json?.SetError("CONFIG_ERROR", "No API key found.", "Run: klau login");
                 return ExitCodes.ConfigError;
+            }
         }
 
         // --- Validate date ---
@@ -96,6 +106,8 @@ public static class ImportCommand
             {
                 ConsoleOutput.Error($"Invalid date format: \"{date}\".");
                 ConsoleOutput.Hint("Expected format: YYYY-MM-DD (e.g. 2026-04-03).");
+                json?.SetError("INPUT_ERROR", $"Invalid date format: \"{date}\".",
+                    "Expected format: YYYY-MM-DD (e.g. 2026-04-03).");
                 return ExitCodes.InputError;
             }
             dispatchDate = date;
@@ -112,7 +124,10 @@ public static class ImportCommand
         try
         {
             ct.ThrowIfCancellationRequested();
-            using var client = dryRun ? null : new KlauClient(resolvedKey!);
+            // Use a longer HTTP timeout than the SDK default (30s) — bulk import
+            // processes jobs sequentially and can take 60-90s for large batches.
+            using var httpClient = dryRun ? null : new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
+            using var client = dryRun ? null : new KlauClient(resolvedKey!, httpClient);
             var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
             IKlauClient? api = client is not null && tenantId is not null
                 ? client.ForTenant(tenantId)
@@ -204,6 +219,12 @@ public static class ImportCommand
                 ConsoleOutput.Summary($"Dry run complete: {batch.Rows.Count} rows mapped, " +
                     $"{batch.Warnings.Count + (validation?.Warnings.Count ?? 0)} " +
                     "warnings. No data sent to Klau.");
+                if (json is not null)
+                {
+                    json.Data["dryRun"] = true;
+                    json.Data["rowsMapped"] = batch.Rows.Count;
+                    json.Data["warnings"] = batch.Warnings.Count + (validation?.Warnings.Count ?? 0);
+                }
                 return ExitCodes.Success;
             }
 
@@ -224,32 +245,53 @@ public static class ImportCommand
                     ct);
             }
             var exitCode = RenderResult(result);
+            PopulateImportJson(json, result, stopwatch);
             if (exitCode != ExitCodes.Success) return exitCode;
 
             // --- Step 6: Optimize ---
+            // Post-import steps (optimize, export) are best-effort — the import
+            // already succeeded, so failures here should warn, not erase that success.
             if (optimize)
             {
                 ct.ThrowIfCancellationRequested();
-                ImportOutcome.OptimizationComplete optResult;
-                using (ConsoleOutput.StartSpinner("Optimizing dispatch"))
+                try
                 {
-                    optResult = await pipeline.OptimizeAsync(dispatchDate, ct);
+                    ImportOutcome.OptimizationComplete optResult;
+                    using (ConsoleOutput.StartSpinner("Optimizing dispatch"))
+                    {
+                        optResult = await pipeline.OptimizeAsync(dispatchDate, ct);
+                    }
+                    ConsoleOutput.Success($"Grade: {optResult.Grade ?? "N/A"} " +
+                        $"({optResult.PlanQuality ?? 0}/100)  |  Flow: {optResult.FlowScore ?? 0}/100");
+                    ConsoleOutput.Success($"Assigned: {optResult.Assigned ?? 0}/{(optResult.Assigned ?? 0) + (optResult.Unassigned ?? 0)}  " +
+                        $"|  Drive times: {optResult.DriveTimeSource ?? "N/A"}");
                 }
-                ConsoleOutput.Success($"Grade: {optResult.Grade ?? "N/A"} " +
-                    $"({optResult.PlanQuality ?? 0}/100)  |  Flow: {optResult.FlowScore ?? 0}/100");
-                ConsoleOutput.Success($"Assigned: {optResult.Assigned ?? 0}/{(optResult.Assigned ?? 0) + (optResult.Unassigned ?? 0)}  " +
-                    $"|  Drive times: {optResult.DriveTimeSource ?? "N/A"}");
+                catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                {
+                    // Connection lost or error — but optimization runs server-side regardless.
+                    // The background worker continues even when the CLI disconnects.
+                    ConsoleOutput.Warning("Lost connection during optimization, but your jobs were imported successfully.");
+                    ConsoleOutput.Hint("Optimization is still running in the background — check the Klau dashboard for results.");
+                }
             }
 
             // --- Step 7: Export ---
             if (exportPath is not null)
             {
                 ct.ThrowIfCancellationRequested();
-                using (ConsoleOutput.StartSpinner("Exporting dispatch plan"))
+                try
                 {
-                    await pipeline.ExportAsync(dispatchDate, exportPath, ct);
+                    using (ConsoleOutput.StartSpinner("Exporting dispatch plan"))
+                    {
+                        await pipeline.ExportAsync(dispatchDate, exportPath, ct);
+                    }
+                    ConsoleOutput.Success($"Exported to {exportPath}");
                 }
-                ConsoleOutput.Success($"Exported to {exportPath}");
+                catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                {
+                    ConsoleOutput.Warning($"Export failed: {ex.Message}");
+                    ConsoleOutput.Hint("Jobs were imported successfully. Retry export from the Klau dashboard.");
+                }
             }
 
             stopwatch.Stop();
@@ -260,30 +302,43 @@ public static class ImportCommand
         {
             ConsoleOutput.Error($"File not found: {ex.FileName ?? file.FullName}");
             ConsoleOutput.Hint("Check the file path and try again.");
+            json?.SetError("FILE_NOT_FOUND", $"File not found: {ex.FileName ?? file.FullName}");
             return ExitCodes.InputError;
         }
         catch (NotSupportedException ex)
         {
             ConsoleOutput.Error(ex.Message);
             ConsoleOutput.Hint($"Supported formats: {FileReader.SupportedFormatsText}");
+            json?.SetError("UNSUPPORTED_FORMAT", ex.Message);
             return ExitCodes.InputError;
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("limit"))
         {
             ConsoleOutput.Error(ex.Message);
+            json?.SetError("LIMIT_EXCEEDED", ex.Message);
             return ExitCodes.InputError;
         }
         catch (FormatException ex)
         {
             ConsoleOutput.Error($"Invalid file format: {ex.Message}");
             ConsoleOutput.Hint("Ensure the file is a valid CSV or XLSX with a header row.");
+            json?.SetError("INVALID_FORMAT", ex.Message, "Ensure the file is a valid CSV or XLSX with a header row.");
             return ExitCodes.InputError;
         }
         catch (UnauthorizedAccessException)
         {
             ConsoleOutput.Error($"Permission denied: {file.FullName}");
             ConsoleOutput.Hint("Check file permissions or run with appropriate access.");
+            json?.SetError("PERMISSION_DENIED", $"Permission denied: {file.FullName}");
             return ExitCodes.InputError;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            ConsoleOutput.Blank();
+            ConsoleOutput.Error("Request timed out.");
+            ConsoleOutput.Hint("Check your network connection and try again.");
+            json?.SetError("TIMEOUT", "Request timed out");
+            return ExitCodes.ApiError;
         }
         catch (OperationCanceledException)
         {
@@ -395,7 +450,7 @@ public static class ImportCommand
     /// </summary>
     private static async Task<string?> TryFirstRunAuthAsync()
     {
-        if (Console.IsInputRedirected)
+        if (OutputMode.IsNonInteractive)
         {
             // Non-interactive (piped input, CI, etc.) — fall back to the original error
             ConsoleOutput.Error("No API key found.");
@@ -439,7 +494,7 @@ public static class ImportCommand
     /// </summary>
     private static FileInfo? TryResolveFile()
     {
-        if (Console.IsInputRedirected)
+        if (OutputMode.IsNonInteractive)
         {
             ConsoleOutput.Error("No file specified.");
             ConsoleOutput.Hint("Usage: klau import <file.csv>");
@@ -499,7 +554,7 @@ public static class ImportCommand
     /// </summary>
     private static ColumnMapping ConfirmLowConfidenceMappings(ColumnMapping mapping)
     {
-        if (Console.IsInputRedirected)
+        if (OutputMode.IsNonInteractive)
             return mapping;
 
         var lowConfidence = mapping.Matches
@@ -607,5 +662,34 @@ public static class ImportCommand
         if (age.TotalDays < 1) return "today";
         if (age.TotalDays < 2) return "yesterday";
         return $"{(int)age.TotalDays}d ago";
+    }
+
+    // ── JSON output ────────────────────────────────────────────────────────
+
+    private static void PopulateImportJson(
+        CliJsonResponse? json, ImportOutcome result, Stopwatch stopwatch)
+    {
+        if (json is null) return;
+
+        switch (result)
+        {
+            case ImportOutcome.Success s:
+                json.Data["imported"] = s.Imported;
+                json.Data["skipped"] = s.Skipped;
+                json.Data["customersCreated"] = s.CustomersCreated;
+                json.Data["sitesCreated"] = s.SitesCreated;
+                json.Data["errors"] = s.Errors;
+                json.Data["durationSeconds"] = Math.Round(stopwatch.Elapsed.TotalSeconds, 1);
+                break;
+            case ImportOutcome.PartialFailure pf:
+                json.Data["imported"] = pf.Imported;
+                json.Data["skipped"] = pf.Skipped;
+                json.Data["errors"] = pf.Errors;
+                json.Data["durationSeconds"] = Math.Round(stopwatch.Elapsed.TotalSeconds, 1);
+                break;
+            case ImportOutcome.ApiError ae:
+                json.SetError(ae.Code, ae.Message, ae.Hint);
+                break;
+        }
     }
 }

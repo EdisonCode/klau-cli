@@ -17,6 +17,7 @@ public static class CsvReader
     /// Read a CSV file and return parsed headers and rows.
     /// </summary>
     private const long MaxFileSizeBytes = 100 * 1024 * 1024; // 100MB
+    private const int MaxRowCount = 50_000;
 
     public static CsvData Read(string filePath)
     {
@@ -30,7 +31,14 @@ public static class CsvReader
                 "Split the file into smaller batches.");
 
         var text = File.ReadAllText(filePath);
-        return Parse(text);
+        var result = Parse(text);
+
+        if (result.Rows.Count > MaxRowCount)
+            throw new InvalidOperationException(
+                $"File has {result.Rows.Count:N0} data rows, exceeding the {MaxRowCount:N0} row limit. " +
+                "Split the file into smaller batches.");
+
+        return result;
     }
 
     /// <summary>

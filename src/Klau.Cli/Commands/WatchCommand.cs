@@ -49,7 +49,7 @@ public static class WatchCommand
             var retainDays = ctx.ParseResult.GetValueForOption(retainDaysOption);
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
             var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
-            var ct = ctx.GetCancellationToken();
+            var ct = SafeCancellation.Create(ctx.GetCancellationToken());
 
             ctx.ExitCode = await RunAsync(folder, pattern, date, optimize, retainDays, apiKey, tenantFlag, ct);
         });
@@ -231,7 +231,7 @@ public static class WatchCommand
                     catch (Exception ex)
                     {
                         ConsoleOutput.Error($"Failed to process {Path.GetFileName(filePath)}: {ex.Message}");
-                        MoveToFailed(filePath, failedDir, ex.ToString());
+                        MoveToFailed(filePath, failedDir, ex.Message);
                         filesErrored++;
                     }
                 }
@@ -261,9 +261,10 @@ public static class WatchCommand
             var destName = $"{Path.GetFileNameWithoutExtension(filePath)}-{timestamp}{Path.GetExtension(filePath)}";
             var destPath = Path.Combine(failedDir, destName);
             File.Move(filePath, destPath, overwrite: true);
-            File.WriteAllText(
-                Path.Combine(failedDir, $"{destName}.error"),
-                $"{DateTime.UtcNow:O}\n{errorDetails}");
+            var errorPath = Path.Combine(failedDir, $"{destName}.error");
+            File.WriteAllText(errorPath, $"{DateTime.UtcNow:O}\n{errorDetails}");
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(errorPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             ConsoleOutput.Warning($"Moved to failed/{destName} (see .error file for details)");
         }
         catch (Exception ex)

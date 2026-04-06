@@ -13,6 +13,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Status(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -27,6 +28,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Success(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.Write("    ");
@@ -42,6 +44,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Warning(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.Write("    ");
@@ -57,6 +60,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Error(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.Write("    ");
@@ -72,6 +76,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Hint(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.Write("    ");
@@ -87,6 +92,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Blank()
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.WriteLine();
@@ -98,6 +104,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Header(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.WriteLine();
@@ -113,6 +120,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Mapping(string from, string to, int padFrom = 20)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.Write("    ");
@@ -131,6 +139,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Table(string[] headers, List<string[]> rows)
     {
+        if (OutputMode.IsJson) return;
         if (headers.Length == 0) return;
 
         // Calculate column widths
@@ -196,6 +205,7 @@ public static class ConsoleOutput
     /// </summary>
     public static void Summary(string message)
     {
+        if (OutputMode.IsJson) return;
         lock (Lock)
         {
             Console.WriteLine();

@@ -47,9 +47,11 @@ public static class SetupCommand
             var template = ctx.ParseResult.GetValueForOption(templateOption);
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
             var tenant = ctx.ParseResult.GetValueForOption(Program.TenantOption);
-            var ct = ctx.GetCancellationToken();
+            var ct = SafeCancellation.Create(ctx.GetCancellationToken());
+            var json = new CliJsonResponse("setup");
 
             ctx.ExitCode = await RunAsync(file, dryRun, generate, template, apiKey, tenant, ct);
+            json.Emit(ctx.ExitCode);
         });
 
         return command;

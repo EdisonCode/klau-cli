@@ -23,21 +23,33 @@ public static class DoctorCommand
         {
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
             var tenantFlag = ctx.ParseResult.GetValueForOption(Program.TenantOption);
-            ctx.ExitCode = await RunAsync(apiKey, tenantFlag);
+            var ct = SafeCancellation.Create(ctx.GetCancellationToken());
+            var json = new CliJsonResponse("doctor");
+
+            ctx.ExitCode = await RunAsync(apiKey, tenantFlag, ct, json);
+            json.Emit(ctx.ExitCode);
         });
 
         return command;
     }
 
-    private static async Task<int> RunAsync(string? apiKeyFlag, string? tenantFlag)
+    private static async Task<int> RunAsync(string? apiKeyFlag, string? tenantFlag,
+        CancellationToken ct, CliJsonResponse? json = null)
     {
         ConsoleOutput.Blank();
         ConsoleOutput.Header("Klau CLI diagnostics:");
         var issues = 0;
 
         // --- Runtime ---
-        ConsoleOutput.Success($".NET runtime: {RuntimeInformation.FrameworkDescription}");
-        ConsoleOutput.Success($"OS: {RuntimeInformation.OSDescription}");
+        var runtime = RuntimeInformation.FrameworkDescription;
+        var os = RuntimeInformation.OSDescription;
+        ConsoleOutput.Success($".NET runtime: {runtime}");
+        ConsoleOutput.Success($"OS: {os}");
+        if (json is not null)
+        {
+            json.Data["runtime"] = runtime;
+            json.Data["os"] = os;
+        }
 
         // --- Credentials ---
         var apiKey = CredentialStore.ResolveApiKey(apiKeyFlag);
@@ -45,6 +57,8 @@ public static class DoctorCommand
         {
             ConsoleOutput.Error("Authentication: not configured");
             ConsoleOutput.Hint("Run: klau login");
+            if (json is not null)
+                json.Data["authentication"] = new Dictionary<string, object?> { ["configured"] = false };
             issues++;
         }
         else
@@ -53,6 +67,15 @@ public static class DoctorCommand
                 : Environment.GetEnvironmentVariable("KLAU_API_KEY") is not null ? "KLAU_API_KEY env var"
                 : "~/.config/klau/credentials.json";
             ConsoleOutput.Success($"Authentication: {CredentialStore.Mask(apiKey)} (from {source})");
+            if (json is not null)
+            {
+                json.Data["authentication"] = new Dictionary<string, object?>
+                {
+                    ["configured"] = true,
+                    ["source"] = source,
+                    ["maskedKey"] = CredentialStore.Mask(apiKey),
+                };
+            }
         }
 
         // --- Tenant ---
@@ -61,10 +84,14 @@ public static class DoctorCommand
         {
             var tenantSource = !string.IsNullOrWhiteSpace(tenantFlag) ? "--tenant flag" : "stored credentials";
             ConsoleOutput.Success($"Tenant: {tenantId} (from {tenantSource})");
+            if (json is not null)
+                json.Data["tenant"] = new Dictionary<string, object?> { ["id"] = tenantId, ["source"] = tenantSource };
         }
         else
         {
             ConsoleOutput.Status("Tenant: none (operating as primary account)");
+            if (json is not null)
+                json.Data["tenant"] = null;
         }
 
         // --- API connectivity ---
@@ -74,13 +101,15 @@ public static class DoctorCommand
             {
                 using var client = new KlauClient(apiKey);
                 IKlauClient api = tenantId is not null ? client.ForTenant(tenantId) : client;
-                var company = await api.Company.GetAsync();
+                var company = await api.Company.GetAsync(ct);
                 ConsoleOutput.Success($"API connectivity: OK ({company.Name})");
+                if (json is not null)
+                    json.Data["apiConnectivity"] = new Dictionary<string, object?> { ["ok"] = true, ["companyName"] = company.Name };
 
                 // --- Account readiness ---
                 try
                 {
-                    var readiness = await api.Readiness.CheckAsync();
+                    var readiness = await api.Readiness.CheckAsync(ct);
                     if (readiness.CanGoLive)
                     {
                         ConsoleOutput.Success($"Dispatch readiness: {readiness.ReadyPercentage}% configured");
@@ -88,7 +117,6 @@ public static class DoctorCommand
                     else
                     {
                         ConsoleOutput.Warning($"Dispatch readiness: {readiness.ReadyPercentage}% configured");
-                        // Only show items relevant to CLI dispatch workflows
                         var dispatchKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                         {
                             "drivers", "trucks", "yards", "dumpSites",
@@ -103,6 +131,14 @@ public static class DoctorCommand
                         }
                         issues++;
                     }
+                    if (json is not null)
+                    {
+                        json.Data["dispatchReadiness"] = new Dictionary<string, object?>
+                        {
+                            ["readyPercentage"] = readiness.ReadyPercentage,
+                            ["canGoLive"] = readiness.CanGoLive,
+                        };
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -113,12 +149,16 @@ public static class DoctorCommand
             {
                 ConsoleOutput.Error("API connectivity: invalid API key format");
                 ConsoleOutput.Hint("API keys must start with kl_live_");
+                if (json is not null)
+                    json.Data["apiConnectivity"] = new Dictionary<string, object?> { ["ok"] = false, ["error"] = "invalid API key format" };
                 issues++;
             }
             catch (Exception ex)
             {
                 ConsoleOutput.Error($"API connectivity: {ex.Message}");
                 ConsoleOutput.Hint("Check your internet connection and API key.");
+                if (json is not null)
+                    json.Data["apiConnectivity"] = new Dictionary<string, object?> { ["ok"] = false, ["error"] = ex.Message };
                 issues++;
             }
         }
@@ -126,6 +166,8 @@ public static class DoctorCommand
         // --- Config directory ---
         var configDir = CredentialStore.GetConfigDirectory();
         ConsoleOutput.Status($"Config: {configDir}");
+        if (json is not null)
+            json.Data["configDir"] = configDir;
 
         // --- Watch mode heartbeat ---
         var cwd = Directory.GetCurrentDirectory();
@@ -147,6 +189,9 @@ public static class DoctorCommand
         else
             ConsoleOutput.Warning($"{issues} issue(s) found. See above for details.");
         ConsoleOutput.Blank();
+
+        if (json is not null)
+            json.Data["issues"] = issues;
 
         return issues == 0 ? ExitCodes.Success : ExitCodes.ConfigError;
     }

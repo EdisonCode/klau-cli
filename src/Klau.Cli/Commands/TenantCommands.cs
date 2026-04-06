@@ -35,7 +35,9 @@ public static class TenantCommands
         command.SetHandler(async (InvocationContext ctx) =>
         {
             var apiKey = ctx.ParseResult.GetValueForOption(Program.ApiKeyOption);
+            var json = new CliJsonResponse("tenants list");
             ctx.ExitCode = await ListAsync(apiKey);
+            json.Emit(ctx.ExitCode);
         });
 
         return command;
@@ -53,7 +55,9 @@ public static class TenantCommands
         command.SetHandler((InvocationContext ctx) =>
         {
             var id = ctx.ParseResult.GetValueForArgument(idArg);
+            var json = new CliJsonResponse("tenants use");
             ctx.ExitCode = Use(id);
+            json.Emit(ctx.ExitCode);
         });
 
         return command;
@@ -65,7 +69,9 @@ public static class TenantCommands
 
         command.SetHandler((InvocationContext ctx) =>
         {
+            var json = new CliJsonResponse("tenants clear");
             ctx.ExitCode = Clear();
+            json.Emit(ctx.ExitCode);
         });
 
         return command;

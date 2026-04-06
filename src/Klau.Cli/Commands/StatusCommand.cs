@@ -14,6 +14,8 @@ public static class StatusCommand
 
         command.SetHandler((InvocationContext ctx) =>
         {
+            var json = new CliJsonResponse("status");
+
             ConsoleOutput.Blank();
             ConsoleOutput.Header("Klau CLI status:");
 
@@ -25,20 +27,30 @@ public static class StatusCommand
             if (!string.IsNullOrWhiteSpace(cliKey))
             {
                 ConsoleOutput.Success($"API key: {CredentialStore.Mask(cliKey)} (from --api-key flag)");
+                json.Data["authenticated"] = true;
+                json.Data["apiKeySource"] = "--api-key flag";
+                json.Data["maskedKey"] = CredentialStore.Mask(cliKey);
             }
             else if (!string.IsNullOrWhiteSpace(envKey))
             {
                 ConsoleOutput.Success($"API key: {CredentialStore.Mask(envKey)} (from KLAU_API_KEY env var)");
+                json.Data["authenticated"] = true;
+                json.Data["apiKeySource"] = "KLAU_API_KEY env var";
+                json.Data["maskedKey"] = CredentialStore.Mask(envKey);
             }
             else if (stored is not null)
             {
                 ConsoleOutput.Success($"API key: {CredentialStore.Mask(stored.ApiKey)} (from {CredentialStore.GetCredentialsPath()})");
                 ConsoleOutput.Status($"Stored at: {stored.StoredAt:yyyy-MM-dd HH:mm:ss} UTC");
+                json.Data["authenticated"] = true;
+                json.Data["apiKeySource"] = CredentialStore.GetCredentialsPath();
+                json.Data["maskedKey"] = CredentialStore.Mask(stored.ApiKey);
             }
             else
             {
                 ConsoleOutput.Error("Not authenticated.");
                 ConsoleOutput.Hint("Run: klau login");
+                json.Data["authenticated"] = false;
             }
 
             // Tenant
@@ -48,17 +60,23 @@ public static class StatusCommand
             {
                 var tenantSource = !string.IsNullOrWhiteSpace(tenantFlag) ? "--tenant flag" : "stored credentials";
                 ConsoleOutput.Success($"Tenant: {resolvedTenant} (from {tenantSource})");
+                json.Data["tenant"] = resolvedTenant;
             }
             else
             {
                 ConsoleOutput.Status("Tenant: none");
+                json.Data["tenant"] = null;
             }
 
             // Config file location
-            ConsoleOutput.Status($"Config: {CredentialStore.GetConfigDirectory()}");
+            var configDir = CredentialStore.GetConfigDirectory();
+            ConsoleOutput.Status($"Config: {configDir}");
+            json.Data["configDir"] = configDir;
 
             ConsoleOutput.Blank();
+
             ctx.ExitCode = ExitCodes.Success;
+            json.Emit(ctx.ExitCode);
         });
 
         return command;

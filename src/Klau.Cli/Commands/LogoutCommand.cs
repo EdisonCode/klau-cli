@@ -14,6 +14,7 @@ public static class LogoutCommand
 
         command.SetHandler((InvocationContext ctx) =>
         {
+            var json = new CliJsonResponse("logout");
             if (CredentialStore.Delete())
             {
                 ConsoleOutput.Success("Credentials removed.");
@@ -23,6 +24,7 @@ public static class LogoutCommand
                 ConsoleOutput.Status("No stored credentials found.");
             }
             ctx.ExitCode = ExitCodes.Success;
+            json.Emit(ctx.ExitCode);
         });
 
         return command;
