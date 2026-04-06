@@ -107,10 +107,11 @@ public sealed class ImportPipeline
     }
 
     /// <summary>
-    /// Maximum jobs per API request. Keeps each POST well within the HTTP
-    /// timeout and avoids server-side sequential processing bottlenecks.
+    /// Maximum jobs per API request. The API processes jobs sequentially
+    /// (~5s each), so chunk size × 5s must stay under the gateway timeout
+    /// (30s for Azure Front Door). 8 × 5s = 40s provides margin.
     /// </summary>
-    private const int ChunkSize = 200;
+    private const int ChunkSize = 8;
 
     /// <summary>
     /// Import mapped rows into Klau via the SDK, chunking into batches of
@@ -294,9 +295,34 @@ public sealed class ImportPipeline
         }
 
         var r = job.Result;
+        string? grade = r?.PlanGrade;
+        int? quality = r?.PlanQuality;
+        int? flow = r?.FlowScore;
+        int? assigned = r?.AssignedJobs;
+        int? unassigned = r?.UnassignedJobs;
+        string? driveSource = r?.DriveTimeSource;
+
+        // Fallback: if the poll response didn't include result, fetch board metrics
+        if (grade is null && quality is null)
+        {
+            try
+            {
+                var board = await _client.Dispatches.GetBoardAsync(dispatchDate, ct);
+                var m = board.Metrics;
+                if (m is not null)
+                {
+                    grade ??= m.PlanGrade;
+                    quality ??= m.PlanQuality;
+                    flow ??= m.FlowScore;
+                    assigned ??= m.AssignedJobs;
+                    unassigned ??= m.UnassignedJobs;
+                }
+            }
+            catch { /* board fetch is best-effort */ }
+        }
+
         return new ImportOutcome.OptimizationComplete(
-            r?.PlanGrade, r?.PlanQuality, r?.FlowScore,
-            r?.AssignedJobs, r?.UnassignedJobs, r?.DriveTimeSource);
+            grade, quality, flow, assigned, unassigned, driveSource);
     }
 
     /// <summary>

@@ -78,26 +78,29 @@ public class ImportPipelineTests
     public async Task MultiChunk_AggregatesCountsAcrossChunks()
     {
         var import = new FakeImportClient();
-        // Chunk size is 200, so 350 rows = 2 chunks (200 + 150)
-        import.EnqueueJobsResult(MakeResult(200, batchId: "b-1"));
-        import.EnqueueJobsResult(MakeResult(150, batchId: "b-2"));
+        // Chunk size is 8, so 20 rows = 3 chunks (8 + 8 + 4)
+        import.EnqueueJobsResult(MakeResult(8, batchId: "b-1"));
+        import.EnqueueJobsResult(MakeResult(8, batchId: "b-2"));
+        import.EnqueueJobsResult(MakeResult(4, batchId: "b-3"));
         import.EnqueueReadiness("b-1", "ready");
         import.EnqueueReadiness("b-2", "ready");
+        import.EnqueueReadiness("b-3", "ready");
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
         var progressCalls = new List<(int sent, int total)>();
         var result = await pipeline.ImportAsync(
-            MakeBatch(350),
+            MakeBatch(20),
             onProgress: (sent, total) => progressCalls.Add((sent, total)),
             CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
-        Assert.Equal(350, success.Imported);
+        Assert.Equal(20, success.Imported);
 
         // Progress should fire for each chunk (multi-chunk mode)
-        Assert.Equal(2, progressCalls.Count);
-        Assert.Equal((0, 350), progressCalls[0]);
-        Assert.Equal((200, 350), progressCalls[1]);
+        Assert.Equal(3, progressCalls.Count);
+        Assert.Equal((0, 20), progressCalls[0]);
+        Assert.Equal((8, 20), progressCalls[1]);
+        Assert.Equal((16, 20), progressCalls[2]);
     }
 
     // ── Mid-batch failure returns PartialFailure ────────────────────────────
@@ -106,14 +109,14 @@ public class ImportPipelineTests
     public async Task MultiChunk_SecondChunkFails_ReturnsPartialFailure()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(200, batchId: "b-1"));
+        import.EnqueueJobsResult(MakeResult(8, batchId: "b-1"));
         import.EnqueueJobsException(new KlauApiException("SERVER_ERROR", "Internal error", 500));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(350), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(16), null, CancellationToken.None);
 
         var partial = Assert.IsType<ImportOutcome.PartialFailure>(result);
-        Assert.Equal(200, partial.Imported);
+        Assert.Equal(8, partial.Imported);
         Assert.Contains(partial.Errors, e => e.Contains("Chunk 2/2 failed"));
     }
 
@@ -194,17 +197,17 @@ public class ImportPipelineTests
     public async Task MultiChunk_ErrorRowNumbersAreOffsetCorrectly()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(200)); // chunk 1: no errors
-        import.EnqueueJobsResult(MakeResult(145, skipped: 5, errors: [
+        import.EnqueueJobsResult(MakeResult(8)); // chunk 1: no errors
+        import.EnqueueJobsResult(MakeResult(5, skipped: 3, errors: [
             new ImportError { Row = 3, Field = "externalId", Message = "duplicate" },
         ]));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(350), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(16), null, CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
-        // Row 3 in chunk 2 = row 203 in the CSV (200 offset + 3)
-        Assert.Contains(success.Errors, e => e.StartsWith("Row 203:"));
+        // Row 3 in chunk 2 = row 11 in the CSV (8 offset + 3)
+        Assert.Contains(success.Errors, e => e.StartsWith("Row 11:"));
     }
 
     // ── Single chunk does NOT invoke progress callback ──────────────────────

@@ -157,25 +157,53 @@ public static class OptimizeCommand
                 return ExitCodes.ApiError;
             }
 
+            // The optimization poll endpoint may not always include the
+            // result object in its response. Fall back to the dispatch board
+            // metrics which have the same data after optimization completes.
             var r = job.Result;
-            ConsoleOutput.Success($"Grade: {r?.PlanGrade ?? "N/A"} " +
-                $"({r?.PlanQuality ?? 0}/100)  |  Flow: {r?.FlowScore ?? 0}/100");
-            ConsoleOutput.Success($"Assigned: {r?.AssignedJobs ?? 0}/{(r?.AssignedJobs ?? 0) + (r?.UnassignedJobs ?? 0)}  " +
-                $"|  Drive times: {r?.DriveTimeSource ?? "N/A"}");
+            string? grade = r?.PlanGrade;
+            int? quality = r?.PlanQuality;
+            int? flow = r?.FlowScore;
+            int? assigned = r?.AssignedJobs;
+            int? unassigned = r?.UnassignedJobs;
+            string? driveSource = r?.DriveTimeSource;
 
-            if (r?.UnassignedJobs > 0)
-                ConsoleOutput.Warning($"{r.UnassignedJobs} job(s) could not be assigned — check driver availability and time windows.");
+            if (grade is null && quality is null)
+            {
+                try
+                {
+                    var board = await api.Dispatches.GetBoardAsync(dispatchDate, ct);
+                    var m = board.Metrics;
+                    if (m is not null)
+                    {
+                        grade ??= m.PlanGrade;
+                        quality ??= m.PlanQuality;
+                        flow ??= m.FlowScore;
+                        assigned ??= m.AssignedJobs;
+                        unassigned ??= m.UnassignedJobs;
+                    }
+                }
+                catch { /* board fetch is best-effort fallback */ }
+            }
+
+            ConsoleOutput.Success($"Grade: {grade ?? "N/A"} " +
+                $"({quality ?? 0}/100)  |  Flow: {flow ?? 0}/100");
+            ConsoleOutput.Success($"Assigned: {assigned ?? 0}/{(assigned ?? 0) + (unassigned ?? 0)}  " +
+                $"|  Drive times: {driveSource ?? "N/A"}");
+
+            if (unassigned > 0)
+                ConsoleOutput.Warning($"{unassigned} job(s) could not be assigned — check driver availability and time windows.");
 
             if (json is not null)
             {
                 json.Data["date"] = dispatchDate;
                 json.Data["mode"] = (optimizationMode ?? OptimizationMode.FULL_DAY).ToString().ToLowerInvariant();
-                json.Data["grade"] = r?.PlanGrade;
-                json.Data["planQuality"] = r?.PlanQuality;
-                json.Data["flowScore"] = r?.FlowScore;
-                json.Data["assigned"] = r?.AssignedJobs;
-                json.Data["unassigned"] = r?.UnassignedJobs;
-                json.Data["driveTimeSource"] = r?.DriveTimeSource;
+                json.Data["grade"] = grade;
+                json.Data["planQuality"] = quality;
+                json.Data["flowScore"] = flow;
+                json.Data["assigned"] = assigned;
+                json.Data["unassigned"] = unassigned;
+                json.Data["driveTimeSource"] = driveSource;
             }
 
             // --- Export ---

@@ -24,7 +24,8 @@ public static class ColumnMapper
     {
         ["CustomerName"] = [
             "customer", "cust name", "customer name", "customername", "account name", "accountname", "cust",
-            "service name", "billing name", "company", "company name", "client", "client name"
+            "service name", "billing name", "company", "company name", "client", "client name",
+            "customer number"
         ],
         ["SiteName"] = [
             "site", "site name", "sitename", "location", "job site", "jobsite",
@@ -37,11 +38,11 @@ public static class ColumnMapper
         ],
         ["SiteCity"] = [
             "city", "site city", "sitecity",
-            "service city"
+            "service city", "city name"
         ],
         ["SiteState"] = [
             "state", "st", "site state", "sitestate",
-            "service state"
+            "service state", "state code"
         ],
         ["SiteZip"] = [
             "zip", "zipcode", "zip code", "postal", "site zip", "sitezip", "postalcode", "postal code",
@@ -53,7 +54,7 @@ public static class ColumnMapper
         ],
         ["ContainerSize"] = [
             "size", "container", "container size", "containersize", "yard", "yards",
-            "size value", "box size", "can size"
+            "size value", "box size", "can size", "yardage", "container size type"
         ],
         ["TimeWindow"] = [
             "window", "time window", "timewindow", "delivery window"
@@ -63,7 +64,7 @@ public static class ColumnMapper
         ],
         ["Notes"] = [
             "notes", "instructions", "comments", "special instructions",
-            "billing notes", "dispatch notes"
+            "billing notes", "dispatch notes", "notes dispatc", "description"
         ],
         ["RequestedDate"] = [
             "date", "requested date", "requesteddate", "request date", "delivery date",
@@ -72,7 +73,8 @@ public static class ColumnMapper
         ["ExternalId"] = [
             "external", "external id", "externalid", "order number", "ordernumber",
             "work order", "workorder", "wo", "po", "reference", "ref",
-            "order", "order nbr", "order no", "ticket", "ticket number"
+            "order", "order nbr", "order no", "ticket", "ticket number",
+            "billing reference", "billing ref"
         ],
     };
 
@@ -85,10 +87,13 @@ public static class ColumnMapper
         var unmapped = new List<string>();
         var usedFields = new HashSet<string>();
 
-        // Build a flat lookup: normalized alias -> field name
+        // Build a flat lookup: normalized alias -> field name.
+        // Include the normalized field name itself (e.g. "customername") so
+        // headers that match the field name directly also resolve.
         var aliasLookup = new List<(string Alias, string Field)>();
         foreach (var (field, aliases) in FieldAliases)
         {
+            aliasLookup.Add((Normalize(field), field));
             foreach (var alias in aliases)
                 aliasLookup.Add((Normalize(alias), field));
         }
