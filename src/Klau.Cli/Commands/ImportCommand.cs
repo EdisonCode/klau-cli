@@ -124,9 +124,9 @@ public static class ImportCommand
         try
         {
             ct.ThrowIfCancellationRequested();
-            // Use a longer HTTP timeout than the SDK default (30s) — bulk import
-            // processes jobs sequentially and can take 60-90s for large batches.
-            using var httpClient = dryRun ? null : CliHttp.CreateClient(TimeSpan.FromSeconds(180));
+            // Async import: submit is fast (202), polling is lightweight GETs.
+            // 60s is generous for any single request in this flow.
+            using var httpClient = dryRun ? null : CliHttp.CreateClient(TimeSpan.FromSeconds(60));
             using var client = dryRun ? null : new KlauClient(resolvedKey!, httpClient);
             var tenantId = CredentialStore.ResolveTenantId(tenantFlag);
             IKlauClient? api = client is not null && tenantId is not null
@@ -234,15 +234,37 @@ public static class ImportCommand
             RenderPreflight(preflightResult);
             if (!preflightResult.CanGoLive) return ExitCodes.ConfigError;
 
-            // --- Step 5: Import ---
+            // --- Step 5: Import (async submit + poll) ---
             ct.ThrowIfCancellationRequested();
             ImportOutcome result;
-            using (var spinner = ConsoleOutput.StartSpinner($"Importing {batch.Rows.Count} jobs for {dispatchDate}"))
+            var progress = ConsoleOutput.StartProgress(
+                $"Importing {batch.Rows.Count} jobs for {dispatchDate}",
+                batch.Rows.Count, "jobs");
+            Spinner? cacheSpinner = null;
+            var lastProcessed = 0;
+            try
             {
                 result = await pipeline!.ImportAsync(batch,
-                    onProgress: (sent, total) =>
-                        spinner.Update($"Importing jobs for {dispatchDate} ({sent}/{total})"),
+                    onProgress: (processed, total) =>
+                    {
+                        var delta = processed - lastProcessed;
+                        if (delta > 0)
+                        {
+                            progress.Advance(delta);
+                            lastProcessed = processed;
+                        }
+                    },
+                    onDriveTimeCacheWarming: () =>
+                    {
+                        progress.Dispose();
+                        cacheSpinner = ConsoleOutput.StartSpinner("Warming drive-time cache");
+                    },
                     ct);
+            }
+            finally
+            {
+                progress.Dispose(); // No-op if already disposed by cache warming callback
+                cacheSpinner?.Dispose();
             }
             var exitCode = RenderResult(result);
             PopulateImportJson(json, result, stopwatch);

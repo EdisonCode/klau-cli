@@ -4,6 +4,7 @@ using Klau.Sdk.Common;
 using Klau.Sdk.Dispatches;
 using Klau.Sdk.Import;
 
+
 namespace Klau.Cli.Domain;
 
 /// <summary>
@@ -107,24 +108,19 @@ public sealed class ImportPipeline
     }
 
     /// <summary>
-    /// Maximum jobs per API request. The API processes jobs sequentially
-    /// (~5s each), so chunk size × 5s must stay under the gateway timeout
-    /// (30s for Azure Front Door). 5 × 5s = 25s with margin.
-    /// </summary>
-    private const int ChunkSize = 5;
-
-    /// <summary>
-    /// Import mapped rows into Klau via the SDK, chunking into batches of
-    /// <see cref="ChunkSize"/> to stay within API and timeout limits.
-    /// All chunks use JobsAsync (POST only). After the loop, readiness is
-    /// polled once for the last batch to warm the drive-time cache.
+    /// Import mapped rows into Klau via the async import API. Submits all jobs
+    /// in a single request, then polls for processing progress and drive-time
+    /// cache readiness. No chunking needed — the server accepts the batch
+    /// immediately (202) and processes in the background.
     /// </summary>
     /// <param name="batch">Mapped rows to import.</param>
-    /// <param name="onProgress">Optional callback invoked before each chunk with (rowsSentSoFar, totalRows).</param>
+    /// <param name="onProgress">Optional callback invoked on each poll with (processed, total).</param>
+    /// <param name="onDriveTimeCacheWarming">Optional callback when import is done but cache is warming.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task<ImportOutcome> ImportAsync(
         MappedBatch batch,
         Action<int, int>? onProgress,
+        Action? onDriveTimeCacheWarming,
         CancellationToken ct)
     {
         var records = batch.Rows.Select(row => new ImportJobRecord
@@ -144,125 +140,144 @@ public sealed class ImportPipeline
             ExternalId = row.ExternalId,
         }).ToList();
 
-        var chunks = records.Chunk(ChunkSize).ToList();
-        var multiChunk = chunks.Count > 1;
+        if (records.Count == 0)
+            return new ImportOutcome.Success(0, 0, 0, 0, []);
 
-        int totalImported = 0, totalSkipped = 0;
-        int totalCustomersCreated = 0, totalSitesCreated = 0;
+        var request = new ImportJobsRequest { Jobs = records, CreateMissing = true };
+
+        // --- Phase 1: Submit all jobs in one request (returns 202 immediately) ---
+        AsyncImportSubmitResult submitResult;
+        try
+        {
+            submitResult = await _client.Import.SubmitJobsAsync(request, ct);
+        }
+        catch (KlauApiException ex) when (ex.IsUnauthorized)
+        {
+            return new ImportOutcome.ApiError(
+                ex.ErrorCode ?? "UNAUTHORIZED", ex.Message,
+                "Check that your KLAU_API_KEY is valid and not expired.");
+        }
+        catch (KlauApiException ex) when (ex.IsValidation)
+        {
+            return new ImportOutcome.ApiError(
+                ex.ErrorCode ?? "VALIDATION_ERROR", ex.Message,
+                "Check your CSV data for invalid values.");
+        }
+        catch (KlauApiException ex)
+        {
+            return new ImportOutcome.ApiError(
+                ex.ErrorCode ?? "API_ERROR", ex.Message, null);
+        }
+
+        var batchId = submitResult.BatchId;
+
+        // --- Phase 2: Poll for processing progress + drive-time cache ---
         var allErrors = new List<string>();
-        int rowOffset = 0;
-        var batchIds = new List<string>();
+        var driveTimeCacheNotified = false;
+        var consecutivePollFailures = 0;
+        const int maxConsecutivePollFailures = 3;
+        AsyncImportBatchStatus status;
 
-        // --- Phase 1: Import all chunks via JobsAsync (no readiness polling) ---
-        for (int i = 0; i < chunks.Count; i++)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            var chunk = chunks[i];
-            var request = new ImportJobsRequest { Jobs = chunk, CreateMissing = true };
-
-            if (multiChunk)
-                onProgress?.Invoke(rowOffset, records.Count);
-
-            ImportJobsResult result;
-            try
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(5);
+            while (true)
             {
-                result = await _client.Import.JobsAsync(request, ct);
-            }
-            catch (KlauApiException ex) when (totalImported > 0)
-            {
-                // A chunk failed after earlier chunks succeeded — report what
-                // was imported so the user knows the system state.
-                allErrors.Add($"Chunk {i + 1}/{chunks.Count} failed: {ex.Message}");
-                return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
-            }
-            catch (KlauApiException ex) when (ex.IsUnauthorized)
-            {
-                return new ImportOutcome.ApiError(
-                    ex.ErrorCode ?? "UNAUTHORIZED", ex.Message,
-                    "Check that your KLAU_API_KEY is valid and not expired.");
-            }
-            catch (KlauApiException ex) when (ex.IsValidation)
-            {
-                return new ImportOutcome.ApiError(
-                    ex.ErrorCode ?? "VALIDATION_ERROR", ex.Message,
-                    "Check your CSV data for invalid values.");
-            }
-            catch (KlauApiException ex)
-            {
-                return new ImportOutcome.ApiError(
-                    ex.ErrorCode ?? "API_ERROR", ex.Message, null);
-            }
-
-            totalImported += result.Imported;
-            totalSkipped += result.Skipped;
-            totalCustomersCreated += result.CustomersCreated;
-            totalSitesCreated += result.SitesCreated;
-
-            if (!string.IsNullOrEmpty(result.BatchId))
-                batchIds.Add(result.BatchId);
-
-            foreach (var e in result.Errors)
-                allErrors.Add($"Row {e.Row + rowOffset}: {e.Field} - {e.Message}");
-
-            rowOffset += chunk.Length;
-        }
-
-        // --- Phase 2: Wait for drive-time cache warm-up (all batches) ---
-        if (batchIds.Count > 0)
-        {
-            var allReady = false;
-            try
-            {
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
-                while (DateTime.UtcNow < deadline)
+                if (DateTime.UtcNow >= deadline)
                 {
-                    var pending = false;
-                    foreach (var batchId in batchIds)
-                    {
-                        var readiness = await _client.Import.GetReadinessAsync(batchId, ct);
-                        if (readiness.Status is not ("ready" or "not_applicable"))
-                        {
-                            pending = true;
-                            break;
-                        }
-                    }
-
-                    if (!pending)
-                    {
-                        allReady = true;
-                        break;
-                    }
-
-                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                    allErrors.Add("Import polling timed out after 5 minutes. " +
+                        "Jobs may still be processing — check the Klau dashboard.");
+                    break;
                 }
-            }
-            catch (KlauApiException)
-            {
-                // API error polling readiness — jobs are imported, cache status unknown.
-            }
-            catch (HttpRequestException)
-            {
-                // Network error polling readiness — jobs are imported, cache status unknown.
+
+                ct.ThrowIfCancellationRequested();
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                AsyncImportBatchStatus pollResult;
+                try
+                {
+                    pollResult = await _client.Import.GetBatchStatusAsync(batchId, ct);
+                    consecutivePollFailures = 0;
+                }
+                catch (Exception ex) when (ex is KlauApiException or HttpRequestException)
+                {
+                    consecutivePollFailures++;
+                    if (consecutivePollFailures >= maxConsecutivePollFailures)
+                    {
+                        var kind = ex is HttpRequestException ? "Network" : "API";
+                        allErrors.Add($"{kind} error while polling import status " +
+                            $"({consecutivePollFailures} consecutive failures). " +
+                            "Jobs were accepted — check the Klau dashboard for results.");
+                        return new ImportOutcome.PartialFailure(0, 0, allErrors);
+                    }
+                    continue; // Retry on next poll cycle
+                }
+
+                status = pollResult;
+                onProgress?.Invoke(status.Processed, status.Total);
+
+                // Notify caller when we transition to cache warming
+                if (!driveTimeCacheNotified &&
+                    status.IsTerminal &&
+                    status.DriveTimeCacheStatus == DriveTimeCacheStatus.WARMING)
+                {
+                    driveTimeCacheNotified = true;
+                    onDriveTimeCacheWarming?.Invoke();
+                }
+
+                // Fully done: terminal status AND cache ready/not needed
+                if (status.IsReadyForOptimization)
+                    return BuildOutcome(status, allErrors);
+
+                // Terminal but cache still warming — keep polling
+                if (status.IsTerminal &&
+                    status.DriveTimeCacheStatus is not DriveTimeCacheStatus.WARMING
+                                                  and not DriveTimeCacheStatus.NOT_STARTED)
+                    return BuildOutcome(status, allErrors);
             }
 
-            if (!allReady)
-            {
-                allErrors.Add("Drive-time cache warm-up timed out. " +
-                    "Optimization may use Haversine estimates for new sites.");
-            }
+            // Timed out — try one last status fetch for the result
+            status = await _client.Import.GetBatchStatusAsync(batchId, ct);
+            return BuildOutcome(status, allErrors);
+        }
+        catch (KlauApiException)
+        {
+            allErrors.Add("Lost connection while polling import status. " +
+                "Jobs were accepted — check the Klau dashboard for results.");
+            return new ImportOutcome.PartialFailure(0, 0, allErrors);
+        }
+        catch (HttpRequestException)
+        {
+            allErrors.Add("Network error while polling import status. " +
+                "Jobs were accepted — check the Klau dashboard for results.");
+            return new ImportOutcome.PartialFailure(0, 0, allErrors);
+        }
+    }
+
+    private static ImportOutcome BuildOutcome(AsyncImportBatchStatus status, List<string> errors)
+    {
+        foreach (var e in status.Errors)
+            errors.Add($"Row {e.Row}: {e.Field} - {e.Message}");
+
+        if (status.DriveTimeCacheStatus == DriveTimeCacheStatus.WARMING)
+        {
+            errors.Add("Drive-time cache warm-up timed out. " +
+                "Optimization may use Haversine estimates for new sites.");
         }
 
-        if (totalSkipped > 0 && totalImported == 0)
-            return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
+        if (status.Status == ImportBatchStatus.FAILED)
+            return new ImportOutcome.ApiError("BATCH_FAILED",
+                "The import batch failed during processing.", null);
 
-        // If more than half the rows were skipped, that's a partial failure
-        // even though some imported — the user needs to know something is wrong.
-        if (totalSkipped > 0 && totalSkipped > totalImported)
-            return new ImportOutcome.PartialFailure(totalImported, totalSkipped, allErrors);
+        if (status.Skipped > 0 && status.Imported == 0)
+            return new ImportOutcome.PartialFailure(status.Imported, status.Skipped, errors);
+
+        if (status.Skipped > 0 && status.Skipped > status.Imported)
+            return new ImportOutcome.PartialFailure(status.Imported, status.Skipped, errors);
 
         return new ImportOutcome.Success(
-            totalImported, totalSkipped,
-            totalCustomersCreated, totalSitesCreated, allErrors);
+            status.Imported, status.Skipped,
+            status.CustomersCreated, status.SitesCreated, errors);
     }
 
     /// <summary>

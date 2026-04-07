@@ -42,126 +42,180 @@ public class ImportPipelineTests
         return new MappedBatch(rows, []);
     }
 
-    private static ImportJobsResult MakeResult(int imported, int skipped = 0,
-        string? batchId = null, IReadOnlyList<ImportError>? errors = null) => new()
+    private static AsyncImportBatchStatus MakeStatus(
+        string batchId, ImportBatchStatus status, int total, int processed,
+        int imported = 0, int skipped = 0,
+        int customersCreated = 0, int sitesCreated = 0,
+        DriveTimeCacheStatus driveTimeCacheStatus = DriveTimeCacheStatus.NOT_APPLICABLE,
+        IReadOnlyList<ImportError>? errors = null) => new()
     {
-        Success = skipped == 0,
-        Imported = imported,
-        Skipped = skipped,
         BatchId = batchId,
+        Status = status,
+        Total = total,
+        Processed = processed,
+        Imported = imported > 0 ? imported : processed - skipped,
+        Skipped = skipped,
+        CustomersCreated = customersCreated,
+        SitesCreated = sitesCreated,
+        DriveTimeCacheStatus = driveTimeCacheStatus,
         Errors = errors ?? [],
-        CustomersCreated = 0,
-        SitesCreated = 0,
     };
 
-    // ── Single chunk happy path ─────────────────────────────────────────────
+    // ── Happy path: all imported ────────────────────────────────────────────
 
     [Fact]
-    public async Task SingleChunk_AllImported_ReturnsSuccess()
+    public async Task AllImported_ReturnsSuccess()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(5, batchId: "b-1"));
-        import.EnqueueReadiness("b-1", "ready");
+        import.SetSubmitResult("b-1", 26);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 26, 26, imported: 26,
+            customersCreated: 4, sitesCreated: 8));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(5), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(26), null, null, CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
-        Assert.Equal(5, success.Imported);
+        Assert.Equal(26, success.Imported);
         Assert.Equal(0, success.Skipped);
-        Assert.Empty(success.Errors);
+        Assert.Equal(4, success.CustomersCreated);
+        Assert.Equal(8, success.SitesCreated);
     }
 
-    // ── Multi-chunk aggregation ─────────────────────────────────────────────
+    // ── Progress callback fires on each poll ────────────────────────────────
 
     [Fact]
-    public async Task MultiChunk_AggregatesCountsAcrossChunks()
+    public async Task ProgressCallback_FiresOnEachPoll()
     {
         var import = new FakeImportClient();
-        // Chunk size is 5, so 12 rows = 3 chunks (5 + 5 + 2)
-        import.EnqueueJobsResult(MakeResult(5, batchId: "b-1"));
-        import.EnqueueJobsResult(MakeResult(5, batchId: "b-2"));
-        import.EnqueueJobsResult(MakeResult(2, batchId: "b-3"));
-        import.EnqueueReadiness("b-1", "ready");
-        import.EnqueueReadiness("b-2", "ready");
-        import.EnqueueReadiness("b-3", "ready");
+        import.SetSubmitResult("b-1", 10);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.PROCESSING, 10, 3));
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.PROCESSING, 10, 7));
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 10, 10, imported: 10));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var progressCalls = new List<(int sent, int total)>();
+        var progressCalls = new List<(int processed, int total)>();
         var result = await pipeline.ImportAsync(
-            MakeBatch(12),
-            onProgress: (sent, total) => progressCalls.Add((sent, total)),
+            MakeBatch(10),
+            onProgress: (p, t) => progressCalls.Add((p, t)),
+            onDriveTimeCacheWarming: null,
             CancellationToken.None);
 
-        var success = Assert.IsType<ImportOutcome.Success>(result);
-        Assert.Equal(12, success.Imported);
-
-        // Progress should fire for each chunk (multi-chunk mode)
+        Assert.IsType<ImportOutcome.Success>(result);
         Assert.Equal(3, progressCalls.Count);
-        Assert.Equal((0, 12), progressCalls[0]);
-        Assert.Equal((5, 12), progressCalls[1]);
-        Assert.Equal((10, 12), progressCalls[2]);
+        Assert.Equal((3, 10), progressCalls[0]);
+        Assert.Equal((7, 10), progressCalls[1]);
+        Assert.Equal((10, 10), progressCalls[2]);
     }
 
-    // ── Mid-batch failure returns PartialFailure ────────────────────────────
+    // ── Drive-time cache warming callback ───────────────────────────────────
 
     [Fact]
-    public async Task MultiChunk_SecondChunkFails_ReturnsPartialFailure()
+    public async Task CacheWarming_InvokesCallback()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(5, batchId: "b-1"));
-        import.EnqueueJobsException(new KlauApiException("SERVER_ERROR", "Internal error", 500));
+        import.SetSubmitResult("b-1", 5);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 5, 5, imported: 5,
+            sitesCreated: 2, driveTimeCacheStatus: DriveTimeCacheStatus.WARMING));
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 5, 5, imported: 5,
+            sitesCreated: 2, driveTimeCacheStatus: DriveTimeCacheStatus.READY));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(10), null, CancellationToken.None);
+        var cacheWarmingCalled = false;
 
-        var partial = Assert.IsType<ImportOutcome.PartialFailure>(result);
-        Assert.Equal(5, partial.Imported);
-        Assert.Contains(partial.Errors, e => e.Contains("Chunk 2/2 failed"));
+        var result = await pipeline.ImportAsync(
+            MakeBatch(5), null,
+            onDriveTimeCacheWarming: () => cacheWarmingCalled = true,
+            CancellationToken.None);
+
+        Assert.True(cacheWarmingCalled);
+        var success = Assert.IsType<ImportOutcome.Success>(result);
+        Assert.Equal(5, success.Imported);
     }
 
-    // ── First chunk auth failure returns ApiError ───────────────────────────
+    // ── Auth failure returns ApiError ────────────────────────────────────────
 
     [Fact]
-    public async Task FirstChunk_Unauthorized_ReturnsApiError()
+    public async Task Unauthorized_ReturnsApiError()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsException(new KlauApiException("UNAUTHORIZED", "Bad token", 401));
+        import.ThrowOnSubmit(new KlauApiException("UNAUTHORIZED", "Bad token", 401));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(5), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(5), null, null, CancellationToken.None);
 
         var error = Assert.IsType<ImportOutcome.ApiError>(result);
         Assert.Equal("UNAUTHORIZED", error.Code);
         Assert.NotNull(error.Hint);
     }
 
-    // ── Readiness timeout produces warning ──────────────────────────────────
+    // ── Validation failure returns ApiError ──────────────────────────────────
 
     [Fact]
-    public async Task ReadinessTimeout_ReturnsSuccessWithWarning()
+    public async Task ValidationError_ReturnsApiError()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(5, batchId: "b-1"));
-        // Readiness always returns "warming" — will exceed the deadline
-        import.EnqueueReadiness("b-1", "warming", repeat: true);
+        import.ThrowOnSubmit(new KlauApiException("VALIDATION_ERROR", "Invalid job type", 400));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        // Use a short deadline by passing a pre-cancelled-ish token? No —
-        // the deadline is hardcoded at 120s. Instead, override with a test seam.
-        // For now, verify that a readiness API error (which exercises the same
-        // path) produces the warning.
-        import.ClearReadiness();
-        import.ThrowOnReadiness(new KlauApiException("NOT_FOUND", "Batch not found", 404));
+        var result = await pipeline.ImportAsync(MakeBatch(5), null, null, CancellationToken.None);
 
-        var result = await pipeline.ImportAsync(MakeBatch(5), null, CancellationToken.None);
-
-        var success = Assert.IsType<ImportOutcome.Success>(result);
-        Assert.Equal(5, success.Imported);
-        Assert.Contains(success.Errors, e => e.Contains("Drive-time cache warm-up"));
+        var error = Assert.IsType<ImportOutcome.ApiError>(result);
+        Assert.Equal("VALIDATION_ERROR", error.Code);
     }
 
-    // ── Empty batch ─────────────────────────────────────────────────────────
+    // ── Partial failure: majority skipped ───────────────────────────────────
+
+    [Fact]
+    public async Task MajoritySkipped_ReturnsPartialFailure()
+    {
+        var import = new FakeImportClient();
+        import.SetSubmitResult("b-1", 10);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.PARTIAL_FAILURE, 10, 10,
+            imported: 2, skipped: 8));
+
+        var pipeline = new ImportPipeline(new FakeKlauClient(import));
+        var result = await pipeline.ImportAsync(MakeBatch(10), null, null, CancellationToken.None);
+
+        Assert.IsType<ImportOutcome.PartialFailure>(result);
+    }
+
+    // ── FAILED batch returns ApiError ───────────────────────────────────────
+
+    [Fact]
+    public async Task FailedBatch_ReturnsApiError()
+    {
+        var import = new FakeImportClient();
+        import.SetSubmitResult("b-1", 5);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.FAILED, 5, 0));
+
+        var pipeline = new ImportPipeline(new FakeKlauClient(import));
+        var result = await pipeline.ImportAsync(MakeBatch(5), null, null, CancellationToken.None);
+
+        var error = Assert.IsType<ImportOutcome.ApiError>(result);
+        Assert.Equal("BATCH_FAILED", error.Code);
+    }
+
+    // ── Error rows are included in result ───────────────────────────────────
+
+    [Fact]
+    public async Task ErrorRows_IncludedInResult()
+    {
+        var import = new FakeImportClient();
+        import.SetSubmitResult("b-1", 10);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 10, 10,
+            imported: 9, skipped: 1, errors: [
+                new ImportError { Row = 7, Field = "externalId", Message = "Duplicate external ID" },
+            ]));
+
+        var pipeline = new ImportPipeline(new FakeKlauClient(import));
+        var result = await pipeline.ImportAsync(MakeBatch(10), null, null, CancellationToken.None);
+
+        var success = Assert.IsType<ImportOutcome.Success>(result);
+        Assert.Single(success.Errors);
+        Assert.Contains(success.Errors, e => e.Contains("Row 7") && e.Contains("Duplicate"));
+    }
+
+    // ── Empty batch returns immediate success ───────────────────────────────
 
     [Fact]
     public async Task EmptyBatch_ReturnsSuccessWithZeros()
@@ -170,137 +224,156 @@ public class ImportPipelineTests
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
         var batch = new MappedBatch([], []);
 
-        var result = await pipeline.ImportAsync(batch, null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(batch, null, null, CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
         Assert.Equal(0, success.Imported);
         Assert.Equal(0, success.Skipped);
     }
 
-    // ── Skipped > imported returns PartialFailure ───────────────────────────
+    // ── Transient poll error retries, then recovers ───────────────────────
 
     [Fact]
-    public async Task MajoritySkipped_ReturnsPartialFailure()
+    public async Task TransientPollError_RetriesThenRecovers()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(2, skipped: 8));
+        import.SetSubmitResult("b-1", 5);
+        // First poll fails transiently, second succeeds
+        import.EnqueueStatusException(new HttpRequestException("Connection reset"));
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 5, 5, imported: 5));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(10), null, CancellationToken.None);
-
-        Assert.IsType<ImportOutcome.PartialFailure>(result);
-    }
-
-    // ── Row offset in error messages ────────────────────────────────────────
-
-    [Fact]
-    public async Task MultiChunk_ErrorRowNumbersAreOffsetCorrectly()
-    {
-        var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(5)); // chunk 1: no errors
-        import.EnqueueJobsResult(MakeResult(3, skipped: 2, errors: [
-            new ImportError { Row = 3, Field = "externalId", Message = "duplicate" },
-        ]));
-
-        var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(10), null, CancellationToken.None);
+        var result = await pipeline.ImportAsync(MakeBatch(5), null, null, CancellationToken.None);
 
         var success = Assert.IsType<ImportOutcome.Success>(result);
-        // Row 3 in chunk 2 = row 8 in the CSV (5 offset + 3)
-        Assert.Contains(success.Errors, e => e.StartsWith("Row 8:"));
+        Assert.Equal(5, success.Imported);
     }
 
-    // ── Single chunk does NOT invoke progress callback ──────────────────────
+    // ── 3 consecutive poll failures returns PartialFailure ──────────────────
 
     [Fact]
-    public async Task SingleChunk_DoesNotInvokeProgress()
+    public async Task ThreeConsecutivePollFailures_ReturnsPartialFailure()
     {
         var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(5));
+        import.SetSubmitResult("b-1", 5);
+        import.EnqueueStatusException(new HttpRequestException("fail 1"));
+        import.EnqueueStatusException(new HttpRequestException("fail 2"));
+        import.EnqueueStatusException(new HttpRequestException("fail 3"));
 
         var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var called = false;
+        var result = await pipeline.ImportAsync(MakeBatch(5), null, null, CancellationToken.None);
+
+        var partial = Assert.IsType<ImportOutcome.PartialFailure>(result);
+        Assert.Contains(partial.Errors, e => e.Contains("3 consecutive failures"));
+    }
+
+    // ── API error during polling also retries ───────────────────────────────
+
+    [Fact]
+    public async Task TransientApiPollError_RetriesThenRecovers()
+    {
+        var import = new FakeImportClient();
+        import.SetSubmitResult("b-1", 5);
+        import.EnqueueStatusException(new KlauApiException("SERVER_ERROR", "Internal error", 500));
+        import.EnqueueStatusException(new KlauApiException("SERVER_ERROR", "Internal error", 500));
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 5, 5, imported: 5));
+
+        var pipeline = new ImportPipeline(new FakeKlauClient(import));
+        var result = await pipeline.ImportAsync(MakeBatch(5), null, null, CancellationToken.None);
+
+        var success = Assert.IsType<ImportOutcome.Success>(result);
+        Assert.Equal(5, success.Imported);
+    }
+
+    // ── NOT_APPLICABLE cache skips warming ──────────────────────────────────
+
+    [Fact]
+    public async Task CacheNotApplicable_SkipsCacheWarming()
+    {
+        var import = new FakeImportClient();
+        import.SetSubmitResult("b-1", 5);
+        import.EnqueueStatus(MakeStatus("b-1", ImportBatchStatus.COMPLETED, 5, 5, imported: 5,
+            driveTimeCacheStatus: DriveTimeCacheStatus.NOT_APPLICABLE));
+
+        var pipeline = new ImportPipeline(new FakeKlauClient(import));
+        var cacheWarmingCalled = false;
         var result = await pipeline.ImportAsync(
-            MakeBatch(5),
-            onProgress: (_, _) => called = true,
+            MakeBatch(5), null,
+            onDriveTimeCacheWarming: () => cacheWarmingCalled = true,
             CancellationToken.None);
 
-        Assert.False(called);
-    }
-
-    // ── Multi-batch readiness polling ───────────────────────────────────────
-
-    [Fact]
-    public async Task MultiChunk_PollsReadinessForAllBatches()
-    {
-        var import = new FakeImportClient();
-        import.EnqueueJobsResult(MakeResult(200, batchId: "b-1"));
-        import.EnqueueJobsResult(MakeResult(150, batchId: "b-2"));
-        import.EnqueueReadiness("b-1", "ready");
-        import.EnqueueReadiness("b-2", "ready");
-
-        var pipeline = new ImportPipeline(new FakeKlauClient(import));
-        var result = await pipeline.ImportAsync(MakeBatch(350), null, CancellationToken.None);
-
-        var success = Assert.IsType<ImportOutcome.Success>(result);
-        // Both batch IDs should have been polled
-        Assert.Contains("b-1", import.PolledBatchIds);
-        Assert.Contains("b-2", import.PolledBatchIds);
+        Assert.False(cacheWarmingCalled);
+        Assert.IsType<ImportOutcome.Success>(result);
     }
 
     // ── Test doubles ────────────────────────────────────────────────────────
 
     private sealed class FakeImportClient : IImportClient
     {
-        private readonly Queue<object> _jobsResults = new(); // ImportJobsResult or Exception
-        private readonly Dictionary<string, string> _readiness = new();
-        private bool _readinessRepeat;
-        private Exception? _readinessException;
+        private AsyncImportSubmitResult? _submitResult;
+        private Exception? _submitException;
+        private readonly Queue<object> _statusQueue = new(); // AsyncImportBatchStatus or Exception
 
-        public List<string> PolledBatchIds { get; } = [];
-
-        public void EnqueueJobsResult(ImportJobsResult result) => _jobsResults.Enqueue(result);
-        public void EnqueueJobsException(Exception ex) => _jobsResults.Enqueue(ex);
-
-        public void EnqueueReadiness(string batchId, string status, bool repeat = false)
+        public void SetSubmitResult(string batchId, int jobCount)
         {
-            _readiness[batchId] = status;
-            _readinessRepeat = repeat;
-        }
-
-        public void ClearReadiness() => _readiness.Clear();
-        public void ThrowOnReadiness(Exception ex) => _readinessException = ex;
-
-        public Task<ImportJobsResult> JobsAsync(ImportJobsRequest request, CancellationToken ct)
-        {
-            if (_jobsResults.Count == 0)
-                return Task.FromResult(MakeResult(request.Jobs.Count));
-
-            var next = _jobsResults.Dequeue();
-            if (next is Exception ex) throw ex;
-            return Task.FromResult((ImportJobsResult)next);
-        }
-
-        public Task<BatchReadiness> GetReadinessAsync(string batchId, CancellationToken ct)
-        {
-            PolledBatchIds.Add(batchId);
-
-            if (_readinessException is not null) throw _readinessException;
-
-            var status = _readiness.GetValueOrDefault(batchId, "ready");
-            return Task.FromResult(new BatchReadiness
+            _submitResult = new AsyncImportSubmitResult
             {
                 BatchId = batchId,
-                SitesTotal = 1,
-                SitesCached = status == "ready" ? 1 : 0,
-                Status = status,
-                Message = "",
+                JobCount = jobCount,
+                Status = ImportBatchStatus.ACCEPTED,
+            };
+        }
+
+        public void ThrowOnSubmit(Exception ex) => _submitException = ex;
+
+        public void EnqueueStatus(AsyncImportBatchStatus status) => _statusQueue.Enqueue(status);
+
+        public void EnqueueStatusException(Exception ex) => _statusQueue.Enqueue(ex);
+
+        // --- New async methods (used by the pipeline) ---
+
+        public Task<AsyncImportSubmitResult> SubmitJobsAsync(ImportJobsRequest request, CancellationToken ct)
+        {
+            if (_submitException is not null) throw _submitException;
+            return Task.FromResult(_submitResult ?? new AsyncImportSubmitResult
+            {
+                BatchId = "default",
+                JobCount = request.Jobs.Count,
+                Status = ImportBatchStatus.ACCEPTED,
             });
         }
 
+        public Task<AsyncImportSubmitResult> SubmitJobsAsync(ImportJobsRequest request,
+            KlauRequestOptions options, CancellationToken ct)
+            => SubmitJobsAsync(request, ct);
+
+        public Task<AsyncImportBatchStatus> GetBatchStatusAsync(string batchId, CancellationToken ct)
+        {
+            if (_statusQueue.Count > 0)
+            {
+                var next = _statusQueue.Dequeue();
+                if (next is Exception ex) throw ex;
+                return Task.FromResult((AsyncImportBatchStatus)next);
+            }
+            // Default: completed
+            return Task.FromResult(MakeStatus(batchId, ImportBatchStatus.COMPLETED, 0, 0));
+        }
+
+        // --- Legacy methods (not used by new pipeline, but required by interface) ---
+
+        public Task<ImportJobsResult> JobsAsync(ImportJobsRequest request, CancellationToken ct)
+            => throw new NotImplementedException("Pipeline should use SubmitJobsAsync");
+
+        public Task<BatchReadiness> GetReadinessAsync(string batchId, CancellationToken ct)
+            => throw new NotImplementedException("Pipeline should use GetBatchStatusAsync");
+
         public Task<ImportJobsResult> ImportAndWaitAsync(ImportJobsRequest request,
             TimeSpan? timeout = null, TimeSpan? pollInterval = null, CancellationToken ct = default)
-            => JobsAsync(request, ct); // Not used by the pipeline anymore
+            => throw new NotImplementedException("Pipeline should use SubmitJobsAsync + GetBatchStatusAsync");
+
+        public Task<AsyncImportBatchStatus> SubmitAndWaitAsync(ImportJobsRequest request,
+            TimeSpan? timeout = null, TimeSpan? pollInterval = null, CancellationToken ct = default)
+            => throw new NotImplementedException("Pipeline should use SubmitJobsAsync + GetBatchStatusAsync");
     }
 
     private sealed class FakeKlauClient : IKlauClient
